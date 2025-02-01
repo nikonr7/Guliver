@@ -41,7 +41,7 @@ openai.api_key = os.getenv('OPENAI_API_KEY')
 
 # Initialize Supabase client
 SUPABASE_URL = os.getenv('SUPABASE_URL')
-SUPABASE_KEY = os.getenv('SUPABASE_KEY')
+SUPABASE_KEY = os.getenv('SUPABASE_SERVICE_ROLE_KEY')  # Use service role key instead of anon key
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # Reddit API credentials
@@ -136,6 +136,24 @@ Be precise, practical, and focus on actionable insights."""},
         print_error(f"Error during OpenAI analysis: {e}")
         return ""
 
+def check_existing_analysis(post_id: str) -> tuple[bool, str]:
+    """Check if post already exists in database and return its analysis if found."""
+    try:
+        print(f"{Fore.BLUE}Checking database for post ID: {post_id}{Style.RESET_ALL}")
+        response = supabase.table("reddit_posts").select("*").eq("id", post_id).execute()
+        
+        # Debug print
+        print(f"{Fore.YELLOW}Database response: {response}{Style.RESET_ALL}")
+        
+        if isinstance(response, dict) and response.get('data'):
+            if len(response['data']) > 0:
+                print_success(f"Found existing post in database: {post_id}")
+                return True, response['data'][0]['analysis']
+        return False, ""
+    except Exception as e:
+        print_error(f"Error checking existing analysis: {e}")
+        return False, ""
+
 def store_to_supabase(post: dict, analysis: str):
     """Store the Reddit post and its analysis into Supabase."""
     print_step("Storing data in Supabase...")
@@ -149,11 +167,28 @@ def store_to_supabase(post: dict, analysis: str):
             "url": post.get('url'),
             "score": post.get('score')
         }
+        
+        # Debug print
+        print(f"{Fore.YELLOW}Attempting to insert data for post ID: {post.get('id')}{Style.RESET_ALL}")
+        
         # Insert into the reddit_posts table
         result = supabase.table("reddit_posts").insert(data).execute()
-        print_success(f"Successfully stored post {post.get('id')} in Supabase")
+        
+        # Check for errors in the response
+        if isinstance(result, dict):
+            if result.get('data') and isinstance(result['data'], list):
+                print_success(f"Successfully stored post {post.get('id')} in Supabase")
+                return True
+            elif result.get('data') and isinstance(result['data'], dict) and result['data'].get('message'):
+                print_error(f"Supabase error: {result['data']['message']}")
+                return False
+        
+        print_error(f"Unexpected response format from Supabase: {result}")
+        return False
+        
     except Exception as e:
         print_error(f"Error storing to Supabase: {e}")
+        return False
 
 def validate_subreddit(subreddit: str) -> bool:
     """Validate if a subreddit exists."""
@@ -169,6 +204,9 @@ def validate_subreddit(subreddit: str) -> bool:
         response = requests.get(url, headers=headers)
         if response.status_code == 200:
             data = response.json()
+            if not data.get('data'):
+                print_error(f"r/{subreddit} does not exist")
+                return False
             if data['data'].get('over18', False):
                 print_error(f"r/{subreddit} is NSFW and will be skipped")
                 return False
@@ -232,6 +270,35 @@ def get_post_limit():
         except ValueError:
             print_error("Please enter a valid number")
 
+def process_post(post: dict) -> bool:
+    """Process a single post - either fetch existing analysis or create new one."""
+    content = post.get('title', '')
+    if post.get('selftext'):
+        content += "\n\n" + post.get('selftext')
+    
+    if not content:
+        print_error("Post has no content to analyze.")
+        return False
+
+    # Check if post already exists in database
+    exists, existing_analysis = check_existing_analysis(post.get('id'))
+    if exists:
+        print_success("Found existing analysis in database")
+        print(f"\n{Fore.GREEN}Existing Analysis:{Style.RESET_ALL}")
+        print(f"{Fore.WHITE}{existing_analysis}{Style.RESET_ALL}")
+        return True
+    
+    # If not exists, analyze and store
+    analysis = analyze_text(content)
+    if analysis:
+        print(f"\n{Fore.GREEN}Analysis Results:{Style.RESET_ALL}")
+        print(f"{Fore.WHITE}{analysis}{Style.RESET_ALL}")
+        # Store directly without checking again
+        store_to_supabase(post, analysis)
+        return True
+    
+    return False
+
 def main():
     print_step("Starting Market Research Bot")
     print(f"{Fore.CYAN}{'='*50}{Style.RESET_ALL}")
@@ -244,6 +311,7 @@ def main():
     
     total_posts = 0
     successful_analyses = 0
+    cached_analyses = 0
     
     for subreddit in subreddits:
         print(f"\n{Fore.CYAN}Processing r/{subreddit}{Style.RESET_ALL}")
@@ -251,24 +319,30 @@ def main():
         
         posts = fetch_posts(subreddit, size=post_limit)
         
+        if not posts:
+            print_error(f"No posts found in r/{subreddit}")
+            continue
+        
         for post in posts:
             total_posts += 1
             print(f"\n{Fore.YELLOW}Post {total_posts}:{Style.RESET_ALL}")
             print(f"Title: {post.get('title')[:100]}...")
             
-            content = post.get('title', '')
-            if post.get('selftext'):
-                content += "\n\n" + post.get('selftext')
-            
-            if content:
-                analysis = analyze_text(content)
+            # Check if post exists in database
+            exists, existing_analysis = check_existing_analysis(post.get('id'))
+            if exists:
+                cached_analyses += 1
+                print(f"\n{Fore.GREEN}Existing Analysis:{Style.RESET_ALL}")
+                print(f"{Fore.WHITE}{existing_analysis}{Style.RESET_ALL}")
+                successful_analyses += 1
+            else:
+                # Only analyze if not in cache
+                analysis = analyze_text(post.get('title', '') + "\n\n" + post.get('selftext', ''))
                 if analysis:
-                    successful_analyses += 1
                     print(f"\n{Fore.GREEN}Analysis Results:{Style.RESET_ALL}")
                     print(f"{Fore.WHITE}{analysis}{Style.RESET_ALL}")
                     store_to_supabase(post, analysis)
-            else:
-                print_error("Post has no content to analyze.")
+                    successful_analyses += 1
         
         print(f"\n{Fore.CYAN}{'='*50}{Style.RESET_ALL}")
     
@@ -276,7 +350,12 @@ def main():
     print(f"\n{Fore.CYAN}Summary:{Style.RESET_ALL}")
     print(f"Total posts processed: {total_posts}")
     print(f"Successful analyses: {successful_analyses}")
-    print(f"Success rate: {(successful_analyses/total_posts)*100:.1f}%")
+    print(f"Cached analyses: {cached_analyses}")
+    print(f"New analyses: {successful_analyses - cached_analyses}")
+    if total_posts > 0:
+        print(f"Success rate: {(successful_analyses/total_posts)*100:.1f}%")
+    else:
+        print("Success rate: N/A (no posts processed)")
 
 if __name__ == "__main__":
     main() 
