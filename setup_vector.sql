@@ -1,4 +1,9 @@
--- Create a table for storing Reddit posts and their analysis
+-- Enable the vector extension
+create extension if not exists vector;
+
+-- Now recreate the table with the vector support
+drop table if exists reddit_posts;
+
 create table if not exists reddit_posts (
     id text primary key,
     title text not null,
