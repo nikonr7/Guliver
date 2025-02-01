@@ -1,0 +1,6 @@
+openai
+supabase-py
+python-dotenv
+requests
+tqdm
+colorama 
