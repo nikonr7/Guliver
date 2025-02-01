@@ -300,62 +300,67 @@ def process_post(post: dict) -> bool:
     return False
 
 def main():
-    print_step("Starting Market Research Bot")
-    print(f"{Fore.CYAN}{'='*50}{Style.RESET_ALL}")
-    
-    # Get subreddits from user
-    subreddits = get_user_subreddits()
-    
-    # Get post limit from user
-    post_limit = get_post_limit()
-    
-    total_posts = 0
-    successful_analyses = 0
-    cached_analyses = 0
-    
-    for subreddit in subreddits:
-        print(f"\n{Fore.CYAN}Processing r/{subreddit}{Style.RESET_ALL}")
-        print(f"{Fore.CYAN}{'-'*50}{Style.RESET_ALL}")
+    while True:
+        print_step("Starting Market Research Bot")
+        print(f"{Fore.CYAN}{'='*50}{Style.RESET_ALL}")
         
-        posts = fetch_posts(subreddit, size=post_limit)
+        # Get subreddits from user
+        subreddits = get_user_subreddits()
         
-        if not posts:
-            print_error(f"No posts found in r/{subreddit}")
-            continue
+        # Get post limit from user
+        post_limit = get_post_limit()
         
-        for post in posts:
-            total_posts += 1
-            print(f"\n{Fore.YELLOW}Post {total_posts}:{Style.RESET_ALL}")
-            print(f"Title: {post.get('title')[:100]}...")
+        total_posts = 0
+        successful_analyses = 0
+        cached_analyses = 0
+        
+        for subreddit in subreddits:
+            print(f"\n{Fore.CYAN}Processing r/{subreddit}{Style.RESET_ALL}")
+            print(f"{Fore.CYAN}{'-'*50}{Style.RESET_ALL}")
             
-            # Check if post exists in database
-            exists, existing_analysis = check_existing_analysis(post.get('id'))
-            if exists:
-                cached_analyses += 1
-                print(f"\n{Fore.GREEN}Existing Analysis:{Style.RESET_ALL}")
-                print(f"{Fore.WHITE}{existing_analysis}{Style.RESET_ALL}")
-                successful_analyses += 1
-            else:
-                # Only analyze if not in cache
-                analysis = analyze_text(post.get('title', '') + "\n\n" + post.get('selftext', ''))
-                if analysis:
-                    print(f"\n{Fore.GREEN}Analysis Results:{Style.RESET_ALL}")
-                    print(f"{Fore.WHITE}{analysis}{Style.RESET_ALL}")
-                    store_to_supabase(post, analysis)
+            posts = fetch_posts(subreddit, size=post_limit)
+            
+            if not posts:
+                print_error(f"No posts found in r/{subreddit}")
+                continue
+            
+            for post in posts:
+                total_posts += 1
+                print(f"\n{Fore.YELLOW}Post {total_posts}:{Style.RESET_ALL}")
+                print(f"Title: {post.get('title')[:100]}...")
+                
+                # Check if post exists in database
+                exists, existing_analysis = check_existing_analysis(post.get('id'))
+                if exists:
+                    cached_analyses += 1
+                    print(f"\n{Fore.GREEN}Existing Analysis:{Style.RESET_ALL}")
+                    print(f"{Fore.WHITE}{existing_analysis}{Style.RESET_ALL}")
                     successful_analyses += 1
+                else:
+                    # Only analyze if not in cache
+                    analysis = analyze_text(post.get('title', '') + "\n\n" + post.get('selftext', ''))
+                    if analysis:
+                        print(f"\n{Fore.GREEN}Analysis Results:{Style.RESET_ALL}")
+                        print(f"{Fore.WHITE}{analysis}{Style.RESET_ALL}")
+                        store_to_supabase(post, analysis)
+                        successful_analyses += 1
+            
+            print(f"\n{Fore.CYAN}{'='*50}{Style.RESET_ALL}")
         
-        print(f"\n{Fore.CYAN}{'='*50}{Style.RESET_ALL}")
-    
-    # Print summary
-    print(f"\n{Fore.CYAN}Summary:{Style.RESET_ALL}")
-    print(f"Total posts processed: {total_posts}")
-    print(f"Successful analyses: {successful_analyses}")
-    print(f"Cached analyses: {cached_analyses}")
-    print(f"New analyses: {successful_analyses - cached_analyses}")
-    if total_posts > 0:
-        print(f"Success rate: {(successful_analyses/total_posts)*100:.1f}%")
-    else:
-        print("Success rate: N/A (no posts processed)")
+        # Print summary
+        print(f"\n{Fore.CYAN}Summary:{Style.RESET_ALL}")
+        print(f"Total posts processed: {total_posts}")
+        print(f"Successful analyses: {successful_analyses}")
+        print(f"Cached analyses: {cached_analyses}")
+        print(f"New analyses: {successful_analyses - cached_analyses}")
+        if total_posts > 0:
+            print(f"Success rate: {(successful_analyses/total_posts)*100:.1f}%")
+        else:
+            print("Success rate: N/A (no posts processed)")
+        
+        print(f"\n{Fore.CYAN}Starting new analysis...{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}{'='*50}{Style.RESET_ALL}")
+        print() # Add a blank line for better readability
 
 if __name__ == "__main__":
     main() 
