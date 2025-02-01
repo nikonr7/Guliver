@@ -155,17 +155,92 @@ def store_to_supabase(post: dict, analysis: str):
     except Exception as e:
         print_error(f"Error storing to Supabase: {e}")
 
+def validate_subreddit(subreddit: str) -> bool:
+    """Validate if a subreddit exists."""
+    print_step(f"Validating r/{subreddit}...")
+    
+    headers = {
+        'User-Agent': REDDIT_USER_AGENT
+    }
+    
+    url = f"https://www.reddit.com/r/{subreddit}/about.json"
+    
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            data = response.json()
+            if data['data'].get('over18', False):
+                print_error(f"r/{subreddit} is NSFW and will be skipped")
+                return False
+            print_success(f"r/{subreddit} exists and is valid")
+            return True
+        else:
+            print_error(f"r/{subreddit} does not exist or is private")
+            return False
+    except Exception as e:
+        print_error(f"Error validating r/{subreddit}: {e}")
+        return False
+
+def get_user_subreddits():
+    """Get and validate user input subreddits."""
+    print(f"\n{Fore.CYAN}Enter subreddits to analyze (comma-separated, press enter when done){Style.RESET_ALL}")
+    print(f"{Fore.YELLOW}Example: startups, Entrepreneur, smallbusiness{Style.RESET_ALL}")
+    
+    while True:
+        subreddits_input = input(f"{Fore.GREEN}> {Style.RESET_ALL}").strip()
+        
+        if not subreddits_input:
+            # Use default subreddits if no input
+            default_subreddits = ["startups", "Entrepreneur", "smallbusiness", "SideProject"]
+            print(f"{Fore.YELLOW}Using default subreddits: {', '.join(default_subreddits)}{Style.RESET_ALL}")
+            return default_subreddits
+        
+        # Split and clean input
+        subreddits = [s.strip() for s in subreddits_input.split(',') if s.strip()]
+        
+        if not subreddits:
+            print_error("Please enter at least one subreddit")
+            continue
+        
+        # Validate each subreddit
+        valid_subreddits = []
+        for subreddit in subreddits:
+            if validate_subreddit(subreddit):
+                valid_subreddits.append(subreddit)
+        
+        if valid_subreddits:
+            return valid_subreddits
+        else:
+            print_error("No valid subreddits entered. Please try again.")
+
+def get_post_limit():
+    """Get number of posts to analyze per subreddit."""
+    print(f"\n{Fore.CYAN}How many posts to analyze per subreddit? (1-25, default: 3){Style.RESET_ALL}")
+    
+    while True:
+        try:
+            limit_input = input(f"{Fore.GREEN}> {Style.RESET_ALL}").strip()
+            
+            if not limit_input:
+                return 3
+            
+            limit = int(limit_input)
+            if 1 <= limit <= 25:
+                return limit
+            else:
+                print_error("Please enter a number between 1 and 25")
+        except ValueError:
+            print_error("Please enter a valid number")
+
 def main():
     print_step("Starting Market Research Bot")
     print(f"{Fore.CYAN}{'='*50}{Style.RESET_ALL}")
     
-    # List of relevant subreddits for market research
-    subreddits = [
-        "startups",
-        "Entrepreneur",
-        "smallbusiness",
-        "SideProject"
-    ]
+    # Get subreddits from user
+    subreddits = get_user_subreddits()
+    
+    # Get post limit from user
+    post_limit = get_post_limit()
     
     total_posts = 0
     successful_analyses = 0
@@ -174,7 +249,7 @@ def main():
         print(f"\n{Fore.CYAN}Processing r/{subreddit}{Style.RESET_ALL}")
         print(f"{Fore.CYAN}{'-'*50}{Style.RESET_ALL}")
         
-        posts = fetch_posts(subreddit, size=3)
+        posts = fetch_posts(subreddit, size=post_limit)
         
         for post in posts:
             total_posts += 1
