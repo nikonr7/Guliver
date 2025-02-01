@@ -2,7 +2,8 @@
 create or replace function match_posts(
     query_embedding vector(1536),
     match_threshold float,
-    match_count int
+    match_count int,
+    subreddit_filter text default null
 )
 returns table (
     id text,
@@ -28,7 +29,11 @@ begin
         reddit_posts.score,
         1 - (reddit_posts.embedding <=> query_embedding) as similarity
     from reddit_posts
-    where 1 - (reddit_posts.embedding <=> query_embedding) > match_threshold
+    where
+        -- Apply subreddit filter only if provided
+        (subreddit_filter is null or reddit_posts.subreddit = subreddit_filter)
+        -- Only return posts that are more similar than the threshold
+        and 1 - (reddit_posts.embedding <=> query_embedding) > match_threshold
     order by reddit_posts.embedding <=> query_embedding
     limit match_count;
 end;

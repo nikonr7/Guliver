@@ -194,7 +194,7 @@ async def generate_embedding(text: str) -> List[float]:
         print_error(f"Error generating embedding: {e}")
         return []
 
-async def semantic_search(query: str, match_threshold: float = 0.7, limit: int = 5) -> List[Dict[str, Any]]:
+async def semantic_search(query: str, subreddit: str = None, match_threshold: float = 0.7, limit: int = 5) -> List[Dict[str, Any]]:
     """Find most relevant posts using embedding similarity."""
     print_step(f"Searching: {query[:50]}...")
     try:
@@ -202,20 +202,31 @@ async def semantic_search(query: str, match_threshold: float = 0.7, limit: int =
         if not query_embedding:
             return []
 
-        # Remove await as Supabase RPC is not async
+        # Call match_posts without subreddit filter
         results = supabase.rpc(
             'match_posts',
             {
                 'query_embedding': query_embedding,
                 'match_threshold': match_threshold,
-                'match_count': limit
+                'match_count': limit if not subreddit else limit * 3  # Request more posts if filtering
             }
         ).execute()
 
-        if results.data:
+        if not results.data:
+            return []
+
+        # Filter by subreddit in Python if specified
+        if subreddit:
+            filtered_results = [
+                post for post in results.data 
+                if post['subreddit'].lower() == subreddit.lower()
+            ][:limit]  # Limit after filtering
+            print_success(f"Found {len(filtered_results)} matches in r/{subreddit}")
+            return filtered_results
+        else:
             print_success(f"Found {len(results.data)} matches")
             return results.data
-        return []
+            
     except Exception as e:
         print_error(f"Error: {str(e)}")
         return []
@@ -346,25 +357,21 @@ async def fetch_and_filter_posts(subreddits: List[str], post_limit: int = 100):
     print(f"\n{Fore.GREEN}Total processed: {total_successful}{Style.RESET_ALL}")
     return total_successful
 
-async def smart_analysis_pipeline(query: str, min_similarity: float = 0.7, max_posts: int = 5):
+async def smart_analysis_pipeline(query: str, subreddit: str = None, min_similarity: float = 0.7, max_posts: int = 5):
     """Smart pipeline that uses embeddings first, then GPT-4 only for relevant posts."""
     print_step(f"Starting smart analysis for query: {query}")
+    if subreddit:
+        print_step(f"Searching in r/{subreddit}")
     
-    # 1. Get query embedding
-    query_embedding = await generate_embedding(query)
-    if not query_embedding:
-        print_error("Failed to generate query embedding")
-        return []
-    
-    # 2. Find similar posts using vector search
-    similar_posts = await semantic_search(query, min_similarity, max_posts)
+    # Find similar posts using vector search
+    similar_posts = await semantic_search(query, subreddit, min_similarity, max_posts)
     if not similar_posts:
         print_error("No similar posts found")
         return []
     
     print_success(f"Found {len(similar_posts)} relevant posts")
     
-    # 3. Analyze relevant posts that haven't been analyzed yet
+    # Analyze relevant posts that haven't been analyzed yet
     for post in similar_posts:
         if not post.get('analysis'):
             print_step(f"Analyzing post: {post['title'][:100]}...")
@@ -405,13 +412,17 @@ async def main_async():
             
             if query:
                 try:
+                    print(f"\n{Fore.CYAN}Enter subreddit to search in (press Enter to search all):{Style.RESET_ALL}")
+                    subreddit = input(f"{Fore.GREEN}> {Style.RESET_ALL}").strip()
+                    
                     threshold = float(input(f"{Fore.GREEN}Enter similarity threshold (0.0-1.0, default: 0.7): {Style.RESET_ALL}").strip() or "0.7")
-                    results = await smart_analysis_pipeline(query, threshold)
+                    results = await smart_analysis_pipeline(query, subreddit if subreddit else None, threshold)
                     
                     if results:
                         print(f"\n{Fore.CYAN}Found {len(results)} relevant posts{Style.RESET_ALL}")
                         for idx, post in enumerate(results, 1):
-                            print(f"\n{Fore.YELLOW}Match {idx} (Similarity: {post['similarity']:.2f}):{Style.RESET_ALL}")
+                            print(f"\n{Fore.YELLOW}Match {idx} (Similarity: {post['similarity']:.2f}){Style.RESET_ALL}")
+                            print(f"Subreddit: r/{post['subreddit']}")
                             print(f"Title: {post['title']}")
                             if post['analysis']:
                                 print(f"{Fore.GREEN}Analysis:{Style.RESET_ALL}")
