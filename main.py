@@ -357,7 +357,81 @@ async def fetch_and_filter_posts(subreddits: List[str], post_limit: int = 100):
     print(f"\n{Fore.GREEN}Total processed: {total_successful}{Style.RESET_ALL}")
     return total_successful
 
-async def smart_analysis_pipeline(query: str, subreddit: str = None, min_similarity: float = 0.7, max_posts: int = 5, analyze_count: int = None):
+async def fetch_comments_async(post_id: str, limit: int = 5) -> List[Dict]:
+    """Fetch top comments for a post."""
+    token = get_reddit_token()
+    if not token:
+        return []
+    
+    headers = {
+        'User-Agent': REDDIT_USER_AGENT,
+        'Authorization': f'Bearer {token}'
+    }
+    
+    url = f"https://oauth.reddit.com/comments/{post_id}"
+    params = {
+        'limit': limit,
+        'sort': 'top',
+        'depth': 1  # Get only top-level comments
+    }
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, params=params) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if len(data) > 1:  # Reddit returns [post_data, comments_data]
+                        comments = data[1]['data']['children']
+                        return [
+                            comment['data']['body'] 
+                            for comment in comments 
+                            if comment['kind'] == 't1' and len(comment['data']['body']) > 50  # Filter short comments
+                        ]
+                return []
+    except Exception as e:
+        print_error(f"Error fetching comments: {e}")
+        return []
+
+async def analyze_post_with_comments(post: dict, comment_limit: int = 5) -> str:
+    """Analyze post content together with its top comments."""
+    print_step("Fetching comments...")
+    comments = await fetch_comments_async(post['id'], comment_limit)
+    
+    # Combine post content with comments
+    full_content = f"POST TITLE: {post['title']}\n\nPOST CONTENT: {post['selftext']}\n\n"
+    if comments:
+        full_content += "TOP COMMENTS:\n"
+        for i, comment in enumerate(comments, 1):
+            full_content += f"\nComment {i}:\n{comment}\n"
+    
+    print_step("Analyzing post and comments with GPT-4...")
+    try:
+        response = await client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": """You are an expert market research analyst and startup advisor. 
+Analyze both the main post and its comments to identify:
+1. Clear market opportunities and gaps
+2. Specific user pain points and problems
+3. Potential startup ideas or business solutions
+4. Market size indicators and trends
+5. Competitive landscape insights
+6. Additional insights from comment discussions
+
+Focus on actionable insights and note when comments provide additional context or validation to the main post's points."""},
+                {"role": "user", "content": f"Analyze this Reddit post and its comments to extract valuable market insights:\n\n{full_content}"}
+            ],
+            max_tokens=800,  # Increased for comment analysis
+            temperature=0.6
+        )
+        analysis = response.choices[0].message.content.strip()
+        print_success("Analysis completed successfully")
+        return analysis
+    except Exception as e:
+        print_error(f"Error during OpenAI analysis: {e}")
+        return ""
+
+async def smart_analysis_pipeline(query: str, subreddit: str = None, min_similarity: float = 0.7, max_posts: int = 5, analyze_count: int = None, comment_limit: int = 5):
     """Smart pipeline that uses embeddings first, then GPT-4 only for relevant posts."""
     print_step(f"Starting smart analysis for query: {query}")
     if subreddit:
@@ -378,7 +452,7 @@ async def smart_analysis_pipeline(query: str, subreddit: str = None, min_similar
     for post in posts_to_analyze:
         if not post.get('analysis'):
             print_step(f"Analyzing post: {post['title'][:100]}...")
-            analysis = await analyze_text(post['title'] + "\n" + post.get('selftext', ''))
+            analysis = await analyze_post_with_comments(post, comment_limit)
             if analysis:
                 await update_post_analysis(post['id'], analysis)
                 post['analysis'] = analysis
@@ -424,12 +498,17 @@ async def main_async():
                     analyze_input = input(f"{Fore.GREEN}> {Style.RESET_ALL}").strip()
                     analyze_count = int(analyze_input) if analyze_input else None
                     
+                    print(f"\n{Fore.CYAN}How many top comments to analyze per post? (default: 5):{Style.RESET_ALL}")
+                    comment_input = input(f"{Fore.GREEN}> {Style.RESET_ALL}").strip()
+                    comment_limit = int(comment_input) if comment_input else 5
+                    
                     results = await smart_analysis_pipeline(
                         query, 
                         subreddit if subreddit else None, 
                         threshold,
                         max_posts=10,  # Show more results
-                        analyze_count=analyze_count
+                        analyze_count=analyze_count,
+                        comment_limit=comment_limit
                     )
                     
                     if results:
@@ -439,7 +518,7 @@ async def main_async():
                             print(f"Subreddit: r/{post['subreddit']}")
                             print(f"Title: {post['title']}")
                             if post['analysis']:
-                                print(f"{Fore.GREEN}Analysis:{Style.RESET_ALL}")
+                                print(f"{Fore.GREEN}Analysis (including comments):{Style.RESET_ALL}")
                                 print(post['analysis'])
                             elif idx <= (analyze_count or len(results)):
                                 print(f"{Fore.YELLOW}Analysis pending...{Style.RESET_ALL}")
@@ -448,7 +527,7 @@ async def main_async():
                     else:
                         print_error("No relevant posts found")
                 except ValueError:
-                    print_error("Please enter a valid number for analysis count")
+                    print_error("Please enter a valid number")
                 except Exception as e:
                     print_error(f"An error occurred: {str(e)}")
             else:
