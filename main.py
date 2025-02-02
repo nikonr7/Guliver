@@ -357,7 +357,7 @@ async def fetch_and_filter_posts(subreddits: List[str], post_limit: int = 100):
     print(f"\n{Fore.GREEN}Total processed: {total_successful}{Style.RESET_ALL}")
     return total_successful
 
-async def smart_analysis_pipeline(query: str, subreddit: str = None, min_similarity: float = 0.7, max_posts: int = 5):
+async def smart_analysis_pipeline(query: str, subreddit: str = None, min_similarity: float = 0.7, max_posts: int = 5, analyze_count: int = None):
     """Smart pipeline that uses embeddings first, then GPT-4 only for relevant posts."""
     print_step(f"Starting smart analysis for query: {query}")
     if subreddit:
@@ -371,8 +371,11 @@ async def smart_analysis_pipeline(query: str, subreddit: str = None, min_similar
     
     print_success(f"Found {len(similar_posts)} relevant posts")
     
+    # If analyze_count is specified, only analyze that many posts
+    posts_to_analyze = similar_posts[:analyze_count] if analyze_count else similar_posts
+    
     # Analyze relevant posts that haven't been analyzed yet
-    for post in similar_posts:
+    for post in posts_to_analyze:
         if not post.get('analysis'):
             print_step(f"Analyzing post: {post['title'][:100]}...")
             analysis = await analyze_text(post['title'] + "\n" + post.get('selftext', ''))
@@ -416,7 +419,18 @@ async def main_async():
                     subreddit = input(f"{Fore.GREEN}> {Style.RESET_ALL}").strip()
                     
                     threshold = float(input(f"{Fore.GREEN}Enter similarity threshold (0.0-1.0, default: 0.7): {Style.RESET_ALL}").strip() or "0.7")
-                    results = await smart_analysis_pipeline(query, subreddit if subreddit else None, threshold)
+                    
+                    print(f"\n{Fore.CYAN}How many posts to analyze with GPT-4? (default: all matched posts):{Style.RESET_ALL}")
+                    analyze_input = input(f"{Fore.GREEN}> {Style.RESET_ALL}").strip()
+                    analyze_count = int(analyze_input) if analyze_input else None
+                    
+                    results = await smart_analysis_pipeline(
+                        query, 
+                        subreddit if subreddit else None, 
+                        threshold,
+                        max_posts=10,  # Show more results
+                        analyze_count=analyze_count
+                    )
                     
                     if results:
                         print(f"\n{Fore.CYAN}Found {len(results)} relevant posts{Style.RESET_ALL}")
@@ -427,8 +441,14 @@ async def main_async():
                             if post['analysis']:
                                 print(f"{Fore.GREEN}Analysis:{Style.RESET_ALL}")
                                 print(post['analysis'])
+                            elif idx <= (analyze_count or len(results)):
+                                print(f"{Fore.YELLOW}Analysis pending...{Style.RESET_ALL}")
+                            else:
+                                print(f"{Fore.YELLOW}Not selected for analysis{Style.RESET_ALL}")
                     else:
                         print_error("No relevant posts found")
+                except ValueError:
+                    print_error("Please enter a valid number for analysis count")
                 except Exception as e:
                     print_error(f"An error occurred: {str(e)}")
             else:
