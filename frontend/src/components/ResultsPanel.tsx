@@ -12,9 +12,12 @@ interface Post {
 interface ResultsPanelProps {
   results: Post[];
   isLoading: boolean;
+  isLoadingMore: boolean;
+  onLoadMore: () => void;
+  hasMore: boolean;
 }
 
-export function ResultsPanel({ results, isLoading }: ResultsPanelProps) {
+export function ResultsPanel({ results, isLoading, isLoadingMore, onLoadMore, hasMore }: ResultsPanelProps) {
   const getRedditUrl = (url: string) => {
     // If the URL starts with 'http', it's already a full URL
     if (url.startsWith('http')) {
@@ -31,14 +34,19 @@ export function ResultsPanel({ results, isLoading }: ResultsPanelProps) {
   if (isLoading) {
     return (
       <div className="bg-white rounded-lg shadow p-6">
-        <div className="animate-pulse space-y-4">
-          {[...Array(3)].map((_, i) => (
-            <div key={i} className="space-y-2">
-              <div className="h-4 bg-gray-200 rounded w-3/4"></div>
-              <div className="h-4 bg-gray-200 rounded w-1/2"></div>
-              <div className="h-20 bg-gray-200 rounded"></div>
-            </div>
-          ))}
+        <div className="space-y-4">
+          <div className="w-full h-2 bg-gray-200 rounded">
+            <div className="h-full bg-blue-600 rounded animate-pulse" style={{ width: '60%' }}></div>
+          </div>
+          <div className="animate-pulse space-y-4">
+            {[...Array(3)].map((_, i) => (
+              <div key={i} className="space-y-2">
+                <div className="h-4 bg-gray-200 rounded w-3/4"></div>
+                <div className="h-4 bg-gray-200 rounded w-1/2"></div>
+                <div className="h-20 bg-gray-200 rounded"></div>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     );
@@ -94,6 +102,27 @@ export function ResultsPanel({ results, isLoading }: ResultsPanelProps) {
           </div>
         </div>
       ))}
+      
+      {hasMore && (
+        <div className="flex justify-center mt-6">
+          <button
+            onClick={onLoadMore}
+            disabled={isLoadingMore}
+            className={`px-6 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 ${
+              isLoadingMore ? 'opacity-50 cursor-not-allowed' : ''
+            }`}
+          >
+            {isLoadingMore ? (
+              <div className="flex items-center space-x-2">
+                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                <span>Loading more...</span>
+              </div>
+            ) : (
+              'Load More Results'
+            )}
+          </button>
+        </div>
+      )}
     </div>
   );
 } 
