@@ -194,38 +194,44 @@ async def generate_embedding(text: str) -> List[float]:
         print_error(f"Error generating embedding: {e}")
         return []
 
-async def semantic_search(query: str, subreddit: str = None, match_threshold: float = 0.7, limit: int = 5) -> List[Dict[str, Any]]:
-    """Find most relevant posts using embedding similarity."""
-    print_step(f"Searching: {query[:50]}...")
+async def semantic_search_with_offset(
+    query: str,
+    subreddit: str,
+    match_threshold: float = 0.7,
+    limit: int = 10,
+    seen_ids: set = None
+) -> List[Dict[str, Any]]:
+    """Enhanced semantic search that can skip already seen posts."""
     try:
         query_embedding = await generate_embedding(query)
         if not query_embedding:
             return []
 
-        # Call match_posts without subreddit filter
+        # Get more results than needed to account for filtering
         results = supabase.rpc(
             'match_posts',
             {
                 'query_embedding': query_embedding,
                 'match_threshold': match_threshold,
-                'match_count': limit if not subreddit else limit * 3  # Request more posts if filtering
+                'match_count': limit * 3  # Get extra to allow for filtering
             }
         ).execute()
 
         if not results.data:
             return []
 
-        # Filter by subreddit in Python if specified
-        if subreddit:
-            filtered_results = [
-                post for post in results.data 
-                if post['subreddit'].lower() == subreddit.lower()
-            ][:limit]  # Limit after filtering
-            print_success(f"Found {len(filtered_results)} matches in r/{subreddit}")
-            return filtered_results
-        else:
-            print_success(f"Found {len(results.data)} matches")
-            return results.data
+        # Filter by subreddit and unseen posts
+        filtered_results = []
+        seen_ids = seen_ids or set()
+        
+        for post in results.data:
+            if post['subreddit'].lower() == subreddit.lower() and post['id'] not in seen_ids:
+                filtered_results.append(post)
+                if len(filtered_results) >= limit:
+                    break
+
+        filtered_results.sort(key=lambda x: x.get('similarity', 0), reverse=True)
+        return filtered_results[:limit]
             
     except Exception as e:
         print_error(f"Error: {str(e)}")
@@ -438,7 +444,7 @@ async def smart_analysis_pipeline(query: str, subreddit: str = None, min_similar
         print_step(f"Searching in r/{subreddit}")
     
     # Find similar posts using vector search
-    similar_posts = await semantic_search(query, subreddit, min_similarity, max_posts)
+    similar_posts = await semantic_search_with_offset(query, subreddit, min_similarity, max_posts)
     if not similar_posts:
         print_error("No similar posts found")
         return []
@@ -540,9 +546,26 @@ async def main_async():
         if input(f"{Fore.GREEN}> {Style.RESET_ALL}").strip().lower() != 'y':
             break
 
+def print_banner():
+    """Print a welcome banner for the application."""
+    banner = f"""
+{Fore.CYAN}╔══════════════════════════════════════════════════════════╗
+║                Reddit Market Research Tool                  ║
+║           Search, Analyze, and Extract Insights            ║
+╚══════════════════════════════════════════════════════════╝{Style.RESET_ALL}
+"""
+    print(banner)
+
 def main():
-    """Entry point that runs the async main function."""
-    asyncio.run(main_async())
+    """Main function to run the Reddit Market Research Tool."""
+    try:
+        asyncio.run(new_interactive_workflow())
+    except KeyboardInterrupt:
+        print(f"\n{Fore.YELLOW}Program interrupted by user. Goodbye!{Style.RESET_ALL}")
+    except Exception as e:
+        print_error(f"An error occurred: {str(e)}")
+    finally:
+        print(f"\n{Fore.YELLOW}Goodbye!{Style.RESET_ALL}")
 
 def validate_subreddit(subreddit: str) -> bool:
     """Validate if a subreddit exists."""
@@ -625,6 +648,195 @@ def get_post_limit():
                 print_error("Please enter a number between 1 and 100")
         except ValueError:
             print_error("Please enter a valid number")
+
+async def unified_subreddit_search(
+    query: str,
+    subreddit: str,
+    match_threshold: float = 0.7,
+    limit: int = 5
+) -> List[Dict[str, Any]]:
+    """
+    Unified function to search and fetch posts from a specific subreddit.
+    Combines historical database search with fresh Reddit data.
+    """
+    print_step(f"Searching in r/{subreddit} for: {query[:50]}...")
+    
+    try:
+        # First, get the most recent post we have for this subreddit
+        latest_post = supabase.table("reddit_posts") \
+            .select("created_at") \
+            .eq("subreddit", subreddit) \
+            .order("created_at", desc=True) \
+            .limit(1) \
+            .execute()
+        
+        # Perform semantic search on all existing data
+        search_results = await semantic_search_with_offset(query, subreddit, match_threshold, limit)
+        
+        # Always fetch some new posts to keep the database fresh
+        print_step(f"Fetching new posts from r/{subreddit}...")
+        new_posts = await process_subreddit_posts(subreddit, limit * 2)  # Fetch extra to ensure enough data
+        
+        if new_posts > 0:
+            # Perform semantic search again including new data
+            updated_results = await semantic_search_with_offset(query, subreddit, match_threshold, limit)
+            
+            # If we got better (more relevant) results, use them
+            if updated_results and (not search_results or 
+                updated_results[0].get('similarity', 0) > search_results[0].get('similarity', 0)):
+                search_results = updated_results
+            
+            print_success(f"Added {new_posts} new posts to the database")
+        
+        if search_results:
+            # Sort results by similarity score
+            search_results.sort(key=lambda x: x.get('similarity', 0), reverse=True)
+        
+        return search_results
+    except Exception as e:
+        print_error(f"Error in unified search: {str(e)}")
+        return []
+
+async def interactive_subreddit_search():
+    """Interactive function for searching within a specific subreddit."""
+    print(f"\n{Fore.CYAN}Enter the subreddit you want to search in:{Style.RESET_ALL}")
+    while True:
+        subreddit = input(f"{Fore.GREEN}Subreddit > {Style.RESET_ALL}").strip()
+        if validate_subreddit(subreddit):
+            break
+        print_error("Please enter a valid subreddit name")
+    
+    print(f"\n{Fore.CYAN}Enter your search query:{Style.RESET_ALL}")
+    query = input(f"{Fore.GREEN}Search > {Style.RESET_ALL}").strip()
+    
+    if not query:
+        print_error("Search query cannot be empty")
+        return
+    
+    print_step("Searching...")
+    results = await unified_subreddit_search(query, subreddit)
+    
+    if not results:
+        print_error("No results found")
+        return
+    
+    print_success(f"\nFound {len(results)} results:")
+    for i, post in enumerate(results, 1):
+        print(f"\n{Fore.CYAN}Result {i}:{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}Title:{Style.RESET_ALL} {post['title']}")
+        if post.get('analysis'):
+            print(f"{Fore.YELLOW}Analysis:{Style.RESET_ALL} {post['analysis'][:200]}...")
+        print(f"{Fore.YELLOW}Similarity Score:{Style.RESET_ALL} {post.get('similarity', 0):.2f}")
+        print(f"{Fore.YELLOW}URL:{Style.RESET_ALL} https://reddit.com{post.get('url', '')}")
+
+async def check_and_update_subreddit(subreddit: str, default_limit: int = 100) -> bool:
+    """Check if we have posts for the subreddit and fetch new ones if needed."""
+    try:
+        print_step(f"Checking existing posts for r/{subreddit}...")
+        
+        # Get our most recent post for this subreddit
+        latest_post = supabase.table("reddit_posts") \
+            .select("created_at") \
+            .eq("subreddit", subreddit) \
+            .order("created_at", desc=True) \
+            .limit(1) \
+            .execute()
+        
+        existing_count = supabase.table("reddit_posts") \
+            .select("id", count="exact") \
+            .eq("subreddit", subreddit) \
+            .execute()
+        
+        count = existing_count.count if existing_count else 0
+        print_success(f"Found {count} existing posts in database")
+        
+        # Always fetch new posts to ensure we have the latest
+        print_step(f"Fetching new posts from r/{subreddit}...")
+        new_posts = await process_subreddit_posts(subreddit, default_limit)
+        
+        if new_posts > 0:
+            print_success(f"Added {new_posts} new posts to the database")
+        else:
+            print_success("Database is up to date")
+        
+        return True
+    except Exception as e:
+        print_error(f"Error updating subreddit: {str(e)}")
+        return False
+
+async def new_interactive_workflow():
+    """New streamlined workflow for fetching and searching."""
+    print_banner()
+    
+    # Step 1: Choose subreddit
+    print(f"\n{Fore.CYAN}Enter the subreddit you want to analyze:{Style.RESET_ALL}")
+    while True:
+        subreddit = input(f"{Fore.GREEN}Subreddit > {Style.RESET_ALL}").strip()
+        if validate_subreddit(subreddit):
+            break
+        print_error("Please enter a valid subreddit name")
+    
+    # Step 2: Check and update posts
+    success = await check_and_update_subreddit(subreddit)
+    if not success:
+        return
+    
+    # Step 3: Get search query and analyze
+    while True:
+        print(f"\n{Fore.CYAN}Enter your search query (or 'exit' to quit):{Style.RESET_ALL}")
+        query = input(f"{Fore.GREEN}Search > {Style.RESET_ALL}").strip()
+        
+        if query.lower() == 'exit':
+            break
+        
+        if not query:
+            print_error("Search query cannot be empty")
+            continue
+        
+        # Keep track of seen posts for this search query
+        seen_post_ids = set()
+        
+        while True:  # Loop for finding more results
+            # Perform search excluding seen posts
+            results = await semantic_search_with_offset(
+                query, 
+                subreddit, 
+                match_threshold=0.7, 
+                limit=10,
+                seen_ids=seen_post_ids
+            )
+            
+            if results:
+                print_success(f"\nFound {len(results)} more relevant posts:")
+                for i, post in enumerate(results, len(seen_post_ids) + 1):
+                    print(f"\n{Fore.CYAN}Result {i}:{Style.RESET_ALL}")
+                    print(f"{Fore.YELLOW}Title:{Style.RESET_ALL} {post['title']}")
+                    print(f"{Fore.YELLOW}Similarity Score:{Style.RESET_ALL} {post.get('similarity', 0):.2f}")
+                    
+                    # Analyze with GPT-4 if not already analyzed
+                    if not post.get('analysis'):
+                        print(f"{Fore.YELLOW}Analyzing with GPT-4...{Style.RESET_ALL}")
+                        analysis = await analyze_post_with_comments(post)
+                        if analysis:
+                            await update_post_analysis(post['id'], analysis)
+                            post['analysis'] = analysis
+                    
+                    if post.get('analysis'):
+                        print(f"{Fore.GREEN}Analysis:{Style.RESET_ALL}")
+                        print(post['analysis'])
+                    
+                    print(f"{Fore.YELLOW}URL:{Style.RESET_ALL} https://reddit.com{post.get('url', '')}")
+                    
+                    # Add to seen posts
+                    seen_post_ids.add(post['id'])
+                
+                # Ask if user wants to see more results
+                print(f"\n{Fore.CYAN}Would you like to see more results? (y/n){Style.RESET_ALL}")
+                if input(f"{Fore.GREEN}> {Style.RESET_ALL}").strip().lower() != 'y':
+                    break
+            else:
+                print_error("No more relevant posts found")
+                break
 
 if __name__ == "__main__":
     main() 
