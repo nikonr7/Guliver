@@ -29,7 +29,7 @@ export function SearchPanel({ onSearch, isLoading }: SearchPanelProps) {
             id="subreddit"
             value={subreddit}
             onChange={(e) => setSubreddit(e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900 placeholder-gray-400"
             placeholder="e.g., technology"
             required
           />
@@ -43,7 +43,7 @@ export function SearchPanel({ onSearch, isLoading }: SearchPanelProps) {
             id="query"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900 placeholder-gray-400"
             placeholder="Enter your search query"
             required
           />
