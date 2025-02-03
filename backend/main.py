@@ -11,6 +11,23 @@ import asyncio
 from typing import List, Dict, Any, Optional
 from concurrent.futures import ThreadPoolExecutor
 import aiohttp
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Optional, List
+import uvicorn
+
+# Initialize FastAPI app
+app = FastAPI(title="Guliver API", version="1.0.0")
+
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, replace with your frontend URL
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Initialize colorama
 init()
@@ -557,15 +574,10 @@ def print_banner():
     print(banner)
 
 def main():
-    """Main function to run the Reddit Market Research Tool."""
-    try:
-        asyncio.run(new_interactive_workflow())
-    except KeyboardInterrupt:
-        print(f"\n{Fore.YELLOW}Program interrupted by user. Goodbye!{Style.RESET_ALL}")
-    except Exception as e:
-        print_error(f"An error occurred: {str(e)}")
-    finally:
-        print(f"\n{Fore.YELLOW}Goodbye!{Style.RESET_ALL}")
+    """Main function to run the FastAPI server."""
+    print_banner()
+    print(f"{Fore.CYAN}Starting FastAPI server...{Style.RESET_ALL}")
+    uvicorn.run(app, host="0.0.0.0", port=8000)
 
 def validate_subreddit(subreddit: str) -> bool:
     """Validate if a subreddit exists."""
@@ -837,6 +849,143 @@ async def new_interactive_workflow():
             else:
                 print_error("No more relevant posts found")
                 break
+
+# API Models
+class SearchRequest(BaseModel):
+    query: str
+    subreddit: str
+    match_threshold: float = 0.7
+    limit: int = 5
+
+class AnalysisRequest(BaseModel):
+    text: str
+
+# Additional API Models
+class BatchProcessRequest(BaseModel):
+    subreddits: List[str]
+    post_limit: int = 10
+
+class SmartAnalysisRequest(BaseModel):
+    query: str
+    subreddit: str
+    min_similarity: float = 0.7
+    max_posts: int = 5
+    analyze_count: Optional[int] = None
+    comment_limit: int = 5
+
+class SubredditValidationResponse(BaseModel):
+    is_valid: bool
+    message: str
+
+# API Routes
+@app.get("/api/health")
+async def health_check():
+    return {"status": "healthy"}
+
+@app.post("/api/search")
+async def search(request: SearchRequest):
+    try:
+        results = await unified_subreddit_search(
+            query=request.query,
+            subreddit=request.subreddit,
+            match_threshold=request.match_threshold,
+            limit=request.limit
+        )
+        return {"status": "success", "data": results}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/analyze")
+async def analyze(request: AnalysisRequest):
+    try:
+        analysis = await analyze_text(request.text)
+        return {"status": "success", "analysis": analysis}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/subreddit/{subreddit}/posts")
+async def get_subreddit_posts(
+    subreddit: str,
+    limit: int = Query(default=10, le=100)
+):
+    try:
+        posts = await fetch_posts_async(subreddit, limit)
+        return {"status": "success", "data": posts}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/smart-analysis")
+async def smart_analysis(request: SmartAnalysisRequest):
+    """Full smart analysis pipeline including comments and GPT-4 analysis."""
+    try:
+        results = await smart_analysis_pipeline(
+            query=request.query,
+            subreddit=request.subreddit,
+            min_similarity=request.min_similarity,
+            max_posts=request.max_posts,
+            analyze_count=request.analyze_count,
+            comment_limit=request.comment_limit
+        )
+        return {"status": "success", "data": results}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/batch-process")
+async def batch_process(request: BatchProcessRequest):
+    """Process multiple subreddits and store posts with embeddings."""
+    try:
+        results = await fetch_and_filter_posts(
+            subreddits=request.subreddits,
+            post_limit=request.post_limit
+        )
+        return {"status": "success", "processed_count": results}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/validate-subreddit/{subreddit}")
+async def validate_subreddit_endpoint(subreddit: str) -> SubredditValidationResponse:
+    """Validate if a subreddit exists and is accessible."""
+    is_valid = validate_subreddit(subreddit)
+    message = f"r/{subreddit} is valid" if is_valid else f"r/{subreddit} is invalid or inaccessible"
+    return SubredditValidationResponse(is_valid=is_valid, message=message)
+
+@app.post("/api/analyze-with-comments")
+async def analyze_with_comments(post_id: str, comment_limit: int = 5):
+    """Analyze a post together with its top comments."""
+    try:
+        # First get the post from database
+        post = supabase.table("reddit_posts").select("*").eq("id", post_id).execute()
+        if not post.data:
+            raise HTTPException(status_code=404, detail="Post not found")
+        
+        analysis = await analyze_post_with_comments(post.data[0], comment_limit)
+        if analysis:
+            # Update the analysis in database
+            await update_post_analysis(post_id, analysis)
+            return {"status": "success", "analysis": analysis}
+        else:
+            raise HTTPException(status_code=500, detail="Analysis failed")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/subreddit/{subreddit}/stats")
+async def get_subreddit_stats(subreddit: str):
+    """Get statistics about stored posts for a subreddit."""
+    try:
+        stats = supabase.table("reddit_posts")\
+            .select("*", count="exact")\
+            .eq("subreddit", subreddit)\
+            .execute()
+        
+        return {
+            "status": "success",
+            "stats": {
+                "total_posts": stats.count,
+                "subreddit": subreddit
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     main() 
