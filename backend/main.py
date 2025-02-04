@@ -454,11 +454,22 @@ Focus on actionable insights and note when comments provide additional context o
         print_error(f"Error during OpenAI analysis: {e}")
         return ""
 
-async def smart_analysis_pipeline(query: str, subreddit: str = None, min_similarity: float = 0.7, max_posts: int = 5, analyze_count: int = None, comment_limit: int = 5):
+async def smart_analysis_pipeline(
+    query: str, 
+    subreddit: str = None, 
+    min_similarity: float = 0.7, 
+    max_posts: int = 5, 
+    analyze_count: int = None,
+    comment_limit: int = 5
+):
     """Smart pipeline that uses embeddings first, then GPT-4 only for relevant posts."""
     print_step(f"Starting smart analysis for query: {query}")
     if subreddit:
         print_step(f"Searching in r/{subreddit}")
+    
+    # First, fetch and store new posts to ensure fresh data
+    print_step(f"Fetching new posts from r/{subreddit}...")
+    await process_subreddit_posts(subreddit, 100)  # Fetch 100 posts to have a good pool
     
     # Find similar posts using vector search
     similar_posts = await semantic_search_with_offset(query, subreddit, min_similarity, max_posts)
@@ -472,13 +483,14 @@ async def smart_analysis_pipeline(query: str, subreddit: str = None, min_similar
     posts_to_analyze = similar_posts[:analyze_count] if analyze_count else similar_posts
     
     # Analyze relevant posts that haven't been analyzed yet
-    for post in posts_to_analyze:
+    for i, post in enumerate(posts_to_analyze):
         if not post.get('analysis'):
-            print_step(f"Analyzing post: {post['title'][:100]}...")
+            print_step(f"Analyzing post {i+1}/{len(posts_to_analyze)}: {post['title'][:100]}...")
             analysis = await analyze_post_with_comments(post, comment_limit)
             if analysis:
                 await update_post_analysis(post['id'], analysis)
                 post['analysis'] = analysis
+                print_success(f"Analysis completed for post {post['id']}")
     
     return similar_posts
 
@@ -885,14 +897,23 @@ async def health_check():
 @app.post("/api/search")
 async def search(request: SearchRequest):
     try:
-        results = await unified_subreddit_search(
+        # Use smart_analysis_pipeline instead of unified_subreddit_search
+        results = await smart_analysis_pipeline(
             query=request.query,
             subreddit=request.subreddit,
-            match_threshold=request.match_threshold,
-            limit=request.limit
+            min_similarity=request.match_threshold,
+            max_posts=request.limit,
+            analyze_count=request.limit,  # Analyze all returned posts
+            comment_limit=5
         )
+        
+        if not results:
+            return {"status": "success", "data": []}
+            
+        print_success(f"Returning {len(results)} analyzed posts")
         return {"status": "success", "data": results}
     except Exception as e:
+        print_error(f"Search error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/analyze")

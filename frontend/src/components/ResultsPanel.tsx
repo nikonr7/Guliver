@@ -1,3 +1,5 @@
+import React, { useEffect, useState } from 'react';
+
 interface Post {
   id: string;
   title: string;
@@ -18,6 +20,47 @@ interface ResultsPanelProps {
 }
 
 export function ResultsPanel({ results, isLoading, isLoadingMore, onLoadMore, hasMore }: ResultsPanelProps) {
+  const [currentLoadingMessage, setCurrentLoadingMessage] = useState(0);
+
+  const loadingMessages = [
+    "Fetching fresh posts...",
+    "Performing semantic search...",
+    "Finding most relevant discussions...",
+    "Starting AI analysis (this takes 2-3 minutes)...",
+    "Analyzing post 1/5 with GPT-4...",
+    "Analyzing post 2/5 with GPT-4...",
+    "Analyzing post 3/5 with GPT-4...",
+    "Analyzing post 4/5 with GPT-4...",
+    "Analyzing post 5/5 with GPT-4...",
+    "Finalizing results..."
+  ];
+
+  // Effect to cycle through loading messages more slowly
+  useEffect(() => {
+    if (!isLoading) {
+      setCurrentLoadingMessage(0);
+      return;
+    }
+
+    const interval = setInterval(() => {
+      setCurrentLoadingMessage((prev) => {
+        // Move quickly through the first 3 messages
+        if (prev < 3) {
+          return prev + 1;
+        }
+        // Pause longer on the analysis messages (4-9)
+        if (prev >= 3 && prev < loadingMessages.length - 1) {
+          if (Math.random() < 0.15) { // Only advance 15% of the time to simulate longer GPT processing
+            return prev + 1;
+          }
+        }
+        return prev;
+      });
+    }, 8000); // Much slower rotation of messages
+
+    return () => clearInterval(interval);
+  }, [isLoading]);
+
   const getRedditUrl = (url: string) => {
     if (url.startsWith('http')) {
       return url;
@@ -58,8 +101,23 @@ export function ResultsPanel({ results, isLoading, isLoadingMore, onLoadMore, ha
     return (
       <div className="bg-white rounded-lg shadow p-6">
         <div className="space-y-4">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center">
+              <div className="w-5 h-5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mr-2"></div>
+              <span className="text-sm text-gray-600">{loadingMessages[currentLoadingMessage]}</span>
+            </div>
+            <span className="text-xs text-gray-500">This may take 2-3 minutes</span>
+          </div>
           <div className="w-full h-2 bg-gray-200 rounded overflow-hidden">
-            <div className="h-full bg-blue-600 rounded animate-pulse w-3/4"></div>
+            <div 
+              className="h-full bg-blue-600 rounded transition-all duration-500" 
+              style={{ 
+                width: `${Math.min(
+                  ((currentLoadingMessage + 1) / loadingMessages.length) * 100, 
+                  95
+                )}%` 
+              }}
+            ></div>
           </div>
           <div className="animate-pulse space-y-6">
             {[...Array(3)].map((_, i) => (
@@ -71,6 +129,10 @@ export function ResultsPanel({ results, isLoading, isLoadingMore, onLoadMore, ha
               </div>
             ))}
           </div>
+        </div>
+        <div className="text-center text-sm text-gray-500 mt-6">
+          <p>The AI analysis takes 2-3 minutes to complete.</p>
+          <p className="mt-1">Each post is being analyzed in detail by GPT-4 for market insights.</p>
         </div>
       </div>
     );
@@ -192,7 +254,7 @@ export function ResultsPanel({ results, isLoading, isLoadingMore, onLoadMore, ha
             {isLoadingMore ? (
               <>
                 <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></div>
-                <span>Loading more results...</span>
+                <span>{loadingMessages[currentLoadingMessage]}</span>
               </>
             ) : (
               <>
