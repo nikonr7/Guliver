@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
 import uvicorn
+from datetime import datetime, timedelta
 
 # Initialize FastAPI app
 app = FastAPI(title="Guliver API", version="1.0.0")
@@ -380,8 +381,80 @@ async def fetch_and_filter_posts(subreddits: List[str], post_limit: int = 100):
     print(f"\n{Fore.GREEN}Total processed: {total_successful}{Style.RESET_ALL}")
     return total_successful
 
-async def fetch_comments_async(post_id: str, limit: int = 5) -> List[Dict]:
-    """Fetch top comments for a post."""
+async def fetch_posts_by_timeframe(subreddit: str, timeframe: str = 'week', size: int = 100) -> List[Dict]:
+    """Fetch posts from a subreddit within a specific timeframe."""
+    print_step(f"Fetching posts from r/{subreddit} for the last {timeframe}...")
+    token = get_reddit_token()
+    if not token:
+        return []
+    
+    headers = {
+        'User-Agent': REDDIT_USER_AGENT,
+        'Authorization': f'Bearer {token}'
+    }
+
+    # Instead of combining all keywords in one query, we'll search for each keyword separately
+    all_posts = []
+    seen_ids = set()
+
+    for keyword in PROBLEM_KEYWORDS:
+        print_step(f"Searching for keyword: {keyword}")
+        try:
+            url = f"https://oauth.reddit.com/r/{subreddit}/search"
+            params = {
+                'q': keyword,  # Search one keyword at a time
+                'restrict_sr': 'true',
+                'sort': 'new',
+                'limit': size,
+                't': timeframe,
+                'type': 'link'
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=headers, params=params) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        posts = data['data']['children']
+                        
+                        # Add new unique posts
+                        for post in posts:
+                            post_data = post['data']
+                            if post_data['id'] not in seen_ids:
+                                seen_ids.add(post_data['id'])
+                                all_posts.append(post_data)
+                                print_success(f"Found post with keyword '{keyword}': {post_data['title'][:100]}")
+                    else:
+                        print_error(f"Failed to fetch posts for keyword '{keyword}'. Status code: {response.status}")
+        except Exception as e:
+            print_error(f"Error fetching posts for keyword '{keyword}': {e}")
+        
+        # Add a small delay between requests to avoid rate limiting
+        await asyncio.sleep(0.5)
+    
+    # Calculate timestamp for the timeframe
+    now = datetime.now()
+    if timeframe == 'week':
+        start_time = now - timedelta(days=7)
+    elif timeframe == 'month':
+        start_time = now - timedelta(days=30)
+    elif timeframe == 'year':
+        start_time = now - timedelta(days=365)
+    else:
+        print_error(f"Invalid timeframe: {timeframe}")
+        return []
+
+    # Filter by timestamp
+    filtered_posts = [
+        post for post in all_posts 
+        if datetime.fromtimestamp(post['created_utc']) >= start_time
+    ]
+    
+    print_success(f"Successfully fetched {len(filtered_posts)} unique posts from r/{subreddit}")
+    return filtered_posts
+
+# Update fetch_comments_async to get all comments
+async def fetch_comments_async(post_id: str) -> List[Dict]:
+    """Fetch all comments for a post."""
     token = get_reddit_token()
     if not token:
         return []
@@ -393,7 +466,6 @@ async def fetch_comments_async(post_id: str, limit: int = 5) -> List[Dict]:
     
     url = f"https://oauth.reddit.com/comments/{post_id}"
     params = {
-        'limit': limit,
         'sort': 'top',
         'depth': 1  # Get only top-level comments
     }
@@ -415,15 +487,16 @@ async def fetch_comments_async(post_id: str, limit: int = 5) -> List[Dict]:
         print_error(f"Error fetching comments: {e}")
         return []
 
-async def analyze_post_with_comments(post: dict, comment_limit: int = 5) -> str:
-    """Analyze post content together with its top comments."""
+# Update analyze_post_with_comments to analyze all comments
+async def analyze_post_with_comments(post: dict) -> str:
+    """Analyze post content together with all its comments."""
     print_step("Fetching comments...")
-    comments = await fetch_comments_async(post['id'], comment_limit)
+    comments = await fetch_comments_async(post['id'])
     
     # Combine post content with comments
     full_content = f"POST TITLE: {post['title']}\n\nPOST CONTENT: {post['selftext']}\n\n"
     if comments:
-        full_content += "TOP COMMENTS:\n"
+        full_content += "COMMENTS:\n"
         for i, comment in enumerate(comments, 1):
             full_content += f"\nComment {i}:\n{comment}\n"
     
@@ -444,7 +517,7 @@ Analyze both the main post and its comments to identify:
 Focus on actionable insights and note when comments provide additional context or validation to the main post's points."""},
                 {"role": "user", "content": f"Analyze this Reddit post and its comments to extract valuable market insights:\n\n{full_content}"}
             ],
-            max_tokens=800,  # Increased for comment analysis
+            max_tokens=1000,  # Increased for more comments
             temperature=0.6
         )
         analysis = response.choices[0].message.content.strip()
@@ -486,7 +559,7 @@ async def smart_analysis_pipeline(
     for i, post in enumerate(posts_to_analyze):
         if not post.get('analysis'):
             print_step(f"Analyzing post {i+1}/{len(posts_to_analyze)}: {post['title'][:100]}...")
-            analysis = await analyze_post_with_comments(post, comment_limit)
+            analysis = await analyze_post_with_comments(post)
             if analysis:
                 await update_post_analysis(post['id'], analysis)
                 post['analysis'] = analysis
@@ -889,6 +962,11 @@ class SubredditValidationResponse(BaseModel):
     is_valid: bool
     message: str
 
+class ProblemAnalysisRequest(BaseModel):
+    subreddit: str
+    timeframe: str = 'week'  # 'week', 'month', or 'year'
+    min_score: int = 5  # Minimum score threshold
+
 # API Routes
 @app.get("/api/health")
 async def health_check():
@@ -1004,6 +1082,107 @@ async def get_subreddit_stats(subreddit: str):
                 "total_posts": stats.count,
                 "subreddit": subreddit
             }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Add new function for keyword-based search
+PROBLEM_KEYWORDS = [
+    "need tool for", "need software for", "looking for tool", "looking for app",
+    "recommend tool", "recommend software", "any tools for", "any apps for",
+    "frustrated with", "tired of manually", "hate doing", "waste time",
+    "wasting time", "takes forever to", "pain point", "pain in the",
+    "annoying process", "automate this", "efficiency", "productivity",
+    "automation", "workflow", "business needs", "company requires",
+    "enterprise solution", "scale our", "manage multiple", "track all",
+    "monitor our", "integrate with", "data entry", "manual process",
+    "repetitive tasks", "time consuming", "complex workflow",
+    "communication gap", "coordination", "collaboration", "solution for",
+    "struggle with", "difficult to", "can't figure out", "need to improve",
+    "optimize", "streamline", "simplify", "how to solve", "help managing",
+    "better way to", "alternative to"
+]
+
+async def search_problem_posts(subreddit: str, timeframe: str = 'week', min_score: int = 1) -> List[Dict]:
+    """Search for posts containing problem-related keywords within the specified timeframe."""
+    print_step(f"Searching for problem-related posts in r/{subreddit}...")
+    
+    # Fetch posts for the timeframe
+    posts = await fetch_posts_by_timeframe(subreddit, timeframe)
+    if not posts:
+        return []
+    
+    # Filter posts by score and keywords
+    filtered_posts = []
+    for post in posts:
+        if post['score'] >= min_score:  # Only include posts with minimum score
+            text = f"{post['title'].lower()} {post['selftext'].lower()}"
+            matching_keywords = [
+                keyword for keyword in PROBLEM_KEYWORDS 
+                if keyword.lower() in text
+            ]
+            if matching_keywords:
+                print_success(f"Found post with {post['score']} votes and keywords {matching_keywords}: {post['title'][:100]}...")
+                filtered_posts.append(post)
+    
+    # Sort posts by score in descending order
+    filtered_posts.sort(key=lambda x: x['score'], reverse=True)
+    print_success(f"Found {len(filtered_posts)} posts containing problem-related keywords (min score: {min_score})")
+    return filtered_posts
+
+async def analyze_problem_posts(subreddit: str, timeframe: str = 'week') -> List[Dict]:
+    """Main function to find and analyze problem-related posts."""
+    # Find posts with problem-related keywords
+    posts = await search_problem_posts(subreddit, timeframe)
+    if not posts:
+        return []
+    
+    # Analyze each post with all its comments
+    analyzed_posts = []
+    for post in posts:
+        analysis = await analyze_post_with_comments(post)
+        if analysis:
+            post['analysis'] = analysis
+            analyzed_posts.append(post)
+    
+    return analyzed_posts
+
+@app.post("/api/analyze-problems")
+async def analyze_problems(request: ProblemAnalysisRequest):
+    """Analyze problem-related posts in a subreddit."""
+    try:
+        if request.timeframe not in ['week', 'month', 'year']:
+            raise HTTPException(status_code=400, detail="Invalid timeframe. Must be 'week', 'month', or 'year'")
+            
+        # First search for posts
+        posts = await search_problem_posts(request.subreddit, request.timeframe, request.min_score)
+        if not posts:
+            return {
+                "status": "success",
+                "timeframe": request.timeframe,
+                "subreddit": request.subreddit,
+                "min_score": request.min_score,
+                "post_count": 0,
+                "data": []
+            }
+        
+        # Then analyze each post with GPT-4
+        print_step(f"Starting GPT-4 analysis for {len(posts)} posts...")
+        analyzed_posts = []
+        for post in posts:
+            analysis = await analyze_post_with_comments(post)
+            if analysis:
+                post['analysis'] = analysis
+                analyzed_posts.append(post)
+                print_success(f"Analyzed post: {post['title'][:100]}")
+        
+        return {
+            "status": "success",
+            "timeframe": request.timeframe,
+            "subreddit": request.subreddit,
+            "min_score": request.min_score,
+            "post_count": len(analyzed_posts),
+            "data": analyzed_posts
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

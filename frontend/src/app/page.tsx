@@ -13,7 +13,7 @@ interface Post {
   url: string;
   score: number;
   subreddit: string;
-  similarity: number;
+  similarity?: number;  // Optional for problem search
 }
 
 export default function Home() {
@@ -23,12 +23,15 @@ export default function Home() {
   const [currentQuery, setCurrentQuery] = useState('');
   const [currentSubreddit, setCurrentSubreddit] = useState('');
   const [seenPostIds, setSeenPostIds] = useState<Set<string>>(new Set());
+  const [isProblemSearch, setIsProblemSearch] = useState(false);
+  const [currentTimeframe, setCurrentTimeframe] = useState<string>('');
 
   const handleSearch = async (query: string, subreddit: string) => {
     setIsLoading(true);
     setCurrentQuery(query);
     setCurrentSubreddit(subreddit);
     setSeenPostIds(new Set());
+    setIsProblemSearch(false);
     
     try {
       const response = await fetch('http://localhost:8000/api/search', {
@@ -56,8 +59,40 @@ export default function Home() {
     }
   };
 
+  const handleProblemSearch = async (subreddit: string, timeframe: string) => {
+    setIsLoading(true);
+    setCurrentSubreddit(subreddit);
+    setCurrentTimeframe(timeframe);
+    setCurrentQuery('');
+    setSeenPostIds(new Set());
+    setIsProblemSearch(true);
+    
+    try {
+      const response = await fetch('http://localhost:8000/api/analyze-problems', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          subreddit,
+          timeframe
+        }),
+      });
+      
+      const data = await response.json();
+      if (data.status === 'success') {
+        setSearchResults(data.data);
+      }
+    } catch (error) {
+      console.error('Problem search failed:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleLoadMore = async () => {
-    if (!currentQuery || !currentSubreddit) return;
+    if (!currentSubreddit) return;
+    if (isProblemSearch) return; // No load more for problem search currently
     
     setIsLoadingMore(true);
     try {
@@ -94,7 +129,11 @@ export default function Home() {
       <main className="container mx-auto px-4 py-8">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           <div className="lg:col-span-1">
-            <SearchPanel onSearch={handleSearch} isLoading={isLoading} />
+            <SearchPanel 
+              onSearch={handleSearch} 
+              onProblemSearch={handleProblemSearch}
+              isLoading={isLoading} 
+            />
           </div>
           <div className="lg:col-span-2">
             <ResultsPanel 
@@ -102,7 +141,9 @@ export default function Home() {
               isLoading={isLoading}
               isLoadingMore={isLoadingMore}
               onLoadMore={handleLoadMore}
-              hasMore={searchResults.length > 0}
+              hasMore={!isProblemSearch && searchResults.length > 0}
+              isProblemSearch={isProblemSearch}
+              timeframe={currentTimeframe}
             />
           </div>
         </div>
