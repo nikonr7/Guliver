@@ -11,6 +11,24 @@ import asyncio
 from typing import List, Dict, Any, Optional
 from concurrent.futures import ThreadPoolExecutor
 import aiohttp
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Optional, List
+import uvicorn
+from datetime import datetime, timedelta, timezone
+
+# Initialize FastAPI app
+app = FastAPI(title="Guliver API", version="1.0.0")
+
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, replace with your frontend URL
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Initialize colorama
 init()
@@ -277,6 +295,9 @@ async def store_post_with_embedding(post: dict, embedding: List[float], analysis
     try:
         print_step(f"Storing: {post.get('title')[:50]}...")
         
+        # Convert Unix timestamp to ISO format
+        created_at = datetime.fromtimestamp(post.get('created_utc'), tz=timezone.utc).isoformat()
+        
         # Prepare the data
         data = {
             "id": post.get('id'),
@@ -286,10 +307,11 @@ async def store_post_with_embedding(post: dict, embedding: List[float], analysis
             "subreddit": post.get('subreddit'),
             "url": post.get('url'),
             "score": post.get('score'),
-            "embedding": embedding
+            "embedding": embedding,
+            "created_at": created_at
         }
         
-        # Use upsert to handle both insert and update (remove await)
+        # Use upsert to handle both insert and update
         result = supabase.table("reddit_posts").upsert(data).execute()
         
         if result.data:
@@ -363,8 +385,80 @@ async def fetch_and_filter_posts(subreddits: List[str], post_limit: int = 100):
     print(f"\n{Fore.GREEN}Total processed: {total_successful}{Style.RESET_ALL}")
     return total_successful
 
-async def fetch_comments_async(post_id: str, limit: int = 5) -> List[Dict]:
-    """Fetch top comments for a post."""
+async def fetch_posts_by_timeframe(subreddit: str, timeframe: str = 'week', size: int = 100) -> List[Dict]:
+    """Fetch posts from a subreddit within a specific timeframe."""
+    print_step(f"Fetching posts from r/{subreddit} for the last {timeframe}...")
+    token = get_reddit_token()
+    if not token:
+        return []
+    
+    headers = {
+        'User-Agent': REDDIT_USER_AGENT,
+        'Authorization': f'Bearer {token}'
+    }
+
+    # Instead of combining all keywords in one query, we'll search for each keyword separately
+    all_posts = []
+    seen_ids = set()
+
+    for keyword in PROBLEM_KEYWORDS:
+        print_step(f"Searching for keyword: {keyword}")
+        try:
+            url = f"https://oauth.reddit.com/r/{subreddit}/search"
+            params = {
+                'q': keyword,  # Search one keyword at a time
+                'restrict_sr': 'true',
+                'sort': 'new',
+                'limit': size,
+                't': timeframe,
+                'type': 'link'
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=headers, params=params) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        posts = data['data']['children']
+                        
+                        # Add new unique posts
+                        for post in posts:
+                            post_data = post['data']
+                            if post_data['id'] not in seen_ids:
+                                seen_ids.add(post_data['id'])
+                                all_posts.append(post_data)
+                                print_success(f"Found post with keyword '{keyword}': {post_data['title'][:100]}")
+                    else:
+                        print_error(f"Failed to fetch posts for keyword '{keyword}'. Status code: {response.status}")
+        except Exception as e:
+            print_error(f"Error fetching posts for keyword '{keyword}': {e}")
+        
+        # Add a small delay between requests to avoid rate limiting
+        await asyncio.sleep(0.5)
+    
+    # Calculate timestamp for the timeframe
+    now = datetime.now()
+    if timeframe == 'week':
+        start_time = now - timedelta(days=7)
+    elif timeframe == 'month':
+        start_time = now - timedelta(days=30)
+    elif timeframe == 'year':
+        start_time = now - timedelta(days=365)
+    else:
+        print_error(f"Invalid timeframe: {timeframe}")
+        return []
+
+    # Filter by timestamp
+    filtered_posts = [
+        post for post in all_posts 
+        if datetime.fromtimestamp(post['created_utc']) >= start_time
+    ]
+    
+    print_success(f"Successfully fetched {len(filtered_posts)} unique posts from r/{subreddit}")
+    return filtered_posts
+
+# Update fetch_comments_async to get all comments
+async def fetch_comments_async(post_id: str) -> List[Dict]:
+    """Fetch all comments for a post."""
     token = get_reddit_token()
     if not token:
         return []
@@ -376,7 +470,6 @@ async def fetch_comments_async(post_id: str, limit: int = 5) -> List[Dict]:
     
     url = f"https://oauth.reddit.com/comments/{post_id}"
     params = {
-        'limit': limit,
         'sort': 'top',
         'depth': 1  # Get only top-level comments
     }
@@ -398,15 +491,16 @@ async def fetch_comments_async(post_id: str, limit: int = 5) -> List[Dict]:
         print_error(f"Error fetching comments: {e}")
         return []
 
-async def analyze_post_with_comments(post: dict, comment_limit: int = 5) -> str:
-    """Analyze post content together with its top comments."""
+# Update analyze_post_with_comments to analyze all comments
+async def analyze_post_with_comments(post: dict) -> str:
+    """Analyze post content together with all its comments."""
     print_step("Fetching comments...")
-    comments = await fetch_comments_async(post['id'], comment_limit)
+    comments = await fetch_comments_async(post['id'])
     
     # Combine post content with comments
     full_content = f"POST TITLE: {post['title']}\n\nPOST CONTENT: {post['selftext']}\n\n"
     if comments:
-        full_content += "TOP COMMENTS:\n"
+        full_content += "COMMENTS:\n"
         for i, comment in enumerate(comments, 1):
             full_content += f"\nComment {i}:\n{comment}\n"
     
@@ -427,7 +521,7 @@ Analyze both the main post and its comments to identify:
 Focus on actionable insights and note when comments provide additional context or validation to the main post's points."""},
                 {"role": "user", "content": f"Analyze this Reddit post and its comments to extract valuable market insights:\n\n{full_content}"}
             ],
-            max_tokens=800,  # Increased for comment analysis
+            max_tokens=1000,  # Increased for more comments
             temperature=0.6
         )
         analysis = response.choices[0].message.content.strip()
@@ -437,11 +531,22 @@ Focus on actionable insights and note when comments provide additional context o
         print_error(f"Error during OpenAI analysis: {e}")
         return ""
 
-async def smart_analysis_pipeline(query: str, subreddit: str = None, min_similarity: float = 0.7, max_posts: int = 5, analyze_count: int = None, comment_limit: int = 5):
+async def smart_analysis_pipeline(
+    query: str, 
+    subreddit: str = None, 
+    min_similarity: float = 0.7, 
+    max_posts: int = 5, 
+    analyze_count: int = None,
+    comment_limit: int = 5
+):
     """Smart pipeline that uses embeddings first, then GPT-4 only for relevant posts."""
     print_step(f"Starting smart analysis for query: {query}")
     if subreddit:
         print_step(f"Searching in r/{subreddit}")
+    
+    # First, fetch and store new posts to ensure fresh data
+    print_step(f"Fetching new posts from r/{subreddit}...")
+    await process_subreddit_posts(subreddit, 100)  # Fetch 100 posts to have a good pool
     
     # Find similar posts using vector search
     similar_posts = await semantic_search_with_offset(query, subreddit, min_similarity, max_posts)
@@ -455,13 +560,14 @@ async def smart_analysis_pipeline(query: str, subreddit: str = None, min_similar
     posts_to_analyze = similar_posts[:analyze_count] if analyze_count else similar_posts
     
     # Analyze relevant posts that haven't been analyzed yet
-    for post in posts_to_analyze:
+    for i, post in enumerate(posts_to_analyze):
         if not post.get('analysis'):
-            print_step(f"Analyzing post: {post['title'][:100]}...")
-            analysis = await analyze_post_with_comments(post, comment_limit)
+            print_step(f"Analyzing post {i+1}/{len(posts_to_analyze)}: {post['title'][:100]}...")
+            analysis = await analyze_post_with_comments(post)
             if analysis:
                 await update_post_analysis(post['id'], analysis)
                 post['analysis'] = analysis
+                print_success(f"Analysis completed for post {post['id']}")
     
     return similar_posts
 
@@ -557,15 +663,10 @@ def print_banner():
     print(banner)
 
 def main():
-    """Main function to run the Reddit Market Research Tool."""
-    try:
-        asyncio.run(new_interactive_workflow())
-    except KeyboardInterrupt:
-        print(f"\n{Fore.YELLOW}Program interrupted by user. Goodbye!{Style.RESET_ALL}")
-    except Exception as e:
-        print_error(f"An error occurred: {str(e)}")
-    finally:
-        print(f"\n{Fore.YELLOW}Goodbye!{Style.RESET_ALL}")
+    """Main function to run the FastAPI server."""
+    print_banner()
+    print(f"{Fore.CYAN}Starting FastAPI server...{Style.RESET_ALL}")
+    uvicorn.run(app, host="0.0.0.0", port=8000)
 
 def validate_subreddit(subreddit: str) -> bool:
     """Validate if a subreddit exists."""
@@ -837,6 +938,419 @@ async def new_interactive_workflow():
             else:
                 print_error("No more relevant posts found")
                 break
+
+# API Models
+class SearchRequest(BaseModel):
+    query: str
+    subreddit: str
+    match_threshold: float = 0.7
+    limit: int = 5
+
+class AnalysisRequest(BaseModel):
+    text: str
+
+# Additional API Models
+class BatchProcessRequest(BaseModel):
+    subreddits: List[str]
+    post_limit: int = 10
+
+class SmartAnalysisRequest(BaseModel):
+    query: str
+    subreddit: str
+    min_similarity: float = 0.7
+    max_posts: int = 5
+    analyze_count: Optional[int] = None
+    comment_limit: int = 5
+
+class SubredditValidationResponse(BaseModel):
+    is_valid: bool
+    message: str
+
+class ProblemAnalysisRequest(BaseModel):
+    subreddit: str
+    timeframe: str = 'week'  # 'week', 'month', or 'year'
+    min_score: int = 5  # Minimum score threshold
+
+# Add new database model for search history
+class SearchHistory(BaseModel):
+    subreddit: str
+    timeframe: str
+    last_search_time: datetime
+    last_post_time: datetime
+
+async def get_last_search(subreddit: str, timeframe: str) -> Optional[Dict]:
+    """Get the last search results for this subreddit and timeframe."""
+    try:
+        result = supabase.table("search_history")\
+            .select("*")\
+            .eq("subreddit", subreddit)\
+            .eq("timeframe", timeframe)\
+            .order("last_search_time", desc=True)\
+            .limit(1)\
+            .execute()
+        
+        if result.data and len(result.data) > 0:
+            return result.data[0]
+        return None
+    except Exception as e:
+        print_error(f"Error getting last search: {e}")
+        return None
+
+async def update_search_history(subreddit: str, timeframe: str, last_post_time: datetime):
+    """Update search history with new timestamp."""
+    try:
+        now = datetime.now(timezone.utc)
+        
+        # First try to get existing record
+        existing = supabase.table("search_history")\
+            .select("*")\
+            .eq("subreddit", subreddit)\
+            .eq("timeframe", timeframe)\
+            .execute()
+        
+        data = {
+            "subreddit": subreddit,
+            "timeframe": timeframe,
+            "last_search_time": now.isoformat(),
+            "last_post_time": last_post_time.replace(tzinfo=timezone.utc).isoformat()
+        }
+        
+        if existing.data and len(existing.data) > 0:
+            # Update existing record
+            result = supabase.table("search_history")\
+                .update(data)\
+                .eq("subreddit", subreddit)\
+                .eq("timeframe", timeframe)\
+                .execute()
+        else:
+            # Insert new record
+            result = supabase.table("search_history")\
+                .insert(data)\
+                .execute()
+        
+        print_success(f"Updated search history for r/{subreddit}")
+        return result
+    except Exception as e:
+        print_error(f"Error updating search history: {e}")
+        return None
+
+async def get_analyzed_posts(subreddit: str, since_time: datetime) -> List[Dict]:
+    """Get already analyzed posts from database."""
+    try:
+        result = supabase.table("reddit_posts")\
+            .select("*")\
+            .eq("subreddit", subreddit)\
+            .gte("created_at", since_time.isoformat())\
+            .not_.is_("analysis", "null")\
+            .order("score", desc=True)\
+            .execute()
+        
+        return result.data if result.data else []
+    except Exception as e:
+        print_error(f"Error getting analyzed posts: {e}")
+        return []
+
+# API Routes
+@app.get("/api/health")
+async def health_check():
+    return {"status": "healthy"}
+
+@app.post("/api/search")
+async def search(request: SearchRequest):
+    try:
+        # Use smart_analysis_pipeline instead of unified_subreddit_search
+        results = await smart_analysis_pipeline(
+            query=request.query,
+            subreddit=request.subreddit,
+            min_similarity=request.match_threshold,
+            max_posts=request.limit,
+            analyze_count=request.limit,  # Analyze all returned posts
+            comment_limit=5
+        )
+        
+        if not results:
+            return {"status": "success", "data": []}
+            
+        print_success(f"Returning {len(results)} analyzed posts")
+        return {"status": "success", "data": results}
+    except Exception as e:
+        print_error(f"Search error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/analyze")
+async def analyze(request: AnalysisRequest):
+    try:
+        analysis = await analyze_text(request.text)
+        return {"status": "success", "analysis": analysis}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/subreddit/{subreddit}/posts")
+async def get_subreddit_posts(
+    subreddit: str,
+    limit: int = Query(default=10, le=100)
+):
+    try:
+        posts = await fetch_posts_async(subreddit, limit)
+        return {"status": "success", "data": posts}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/smart-analysis")
+async def smart_analysis(request: SmartAnalysisRequest):
+    """Full smart analysis pipeline including comments and GPT-4 analysis."""
+    try:
+        results = await smart_analysis_pipeline(
+            query=request.query,
+            subreddit=request.subreddit,
+            min_similarity=request.min_similarity,
+            max_posts=request.max_posts,
+            analyze_count=request.analyze_count,
+            comment_limit=request.comment_limit
+        )
+        return {"status": "success", "data": results}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/batch-process")
+async def batch_process(request: BatchProcessRequest):
+    """Process multiple subreddits and store posts with embeddings."""
+    try:
+        results = await fetch_and_filter_posts(
+            subreddits=request.subreddits,
+            post_limit=request.post_limit
+        )
+        return {"status": "success", "processed_count": results}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/validate-subreddit/{subreddit}")
+async def validate_subreddit_endpoint(subreddit: str) -> SubredditValidationResponse:
+    """Validate if a subreddit exists and is accessible."""
+    is_valid = validate_subreddit(subreddit)
+    message = f"r/{subreddit} is valid" if is_valid else f"r/{subreddit} is invalid or inaccessible"
+    return SubredditValidationResponse(is_valid=is_valid, message=message)
+
+@app.post("/api/analyze-with-comments")
+async def analyze_with_comments(post_id: str, comment_limit: int = 5):
+    """Analyze a post together with its top comments."""
+    try:
+        # First get the post from database
+        post = supabase.table("reddit_posts").select("*").eq("id", post_id).execute()
+        if not post.data:
+            raise HTTPException(status_code=404, detail="Post not found")
+        
+        analysis = await analyze_post_with_comments(post.data[0], comment_limit)
+        if analysis:
+            # Update the analysis in database
+            await update_post_analysis(post_id, analysis)
+            return {"status": "success", "analysis": analysis}
+        else:
+            raise HTTPException(status_code=500, detail="Analysis failed")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/subreddit/{subreddit}/stats")
+async def get_subreddit_stats(subreddit: str):
+    """Get statistics about stored posts for a subreddit."""
+    try:
+        stats = supabase.table("reddit_posts")\
+            .select("*", count="exact")\
+            .eq("subreddit", subreddit)\
+            .execute()
+        
+        return {
+            "status": "success",
+            "stats": {
+                "total_posts": stats.count,
+                "subreddit": subreddit
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Add new function for keyword-based search
+PROBLEM_KEYWORDS = [
+    "need tool for", "need software for", "looking for tool", "looking for app",
+    "recommend tool", "recommend software", "any tools for", "any apps for",
+    "frustrated with", "tired of manually", "hate doing", "waste time",
+    "wasting time", "takes forever to", "pain point", "pain in the",
+    "annoying process", "automate this", "efficiency", "productivity",
+    "automation", "workflow", "business needs", "company requires",
+    "enterprise solution", "scale our", "manage multiple", "track all",
+    "monitor our", "integrate with", "data entry", "manual process",
+    "repetitive tasks", "time consuming", "complex workflow",
+    "communication gap", "coordination", "collaboration", "solution for",
+    "struggle with", "difficult to", "can't figure out", "need to improve",
+    "optimize", "streamline", "simplify", "how to solve", "help managing",
+    "better way to", "alternative to"
+]
+
+async def search_problem_posts(subreddit: str, timeframe: str = 'week', min_score: int = 1) -> List[Dict]:
+    """Search for posts containing problem-related keywords within the specified timeframe."""
+    print_step(f"Searching for problem-related posts in r/{subreddit}...")
+    
+    # Fetch posts for the timeframe
+    posts = await fetch_posts_by_timeframe(subreddit, timeframe)
+    if not posts:
+        return []
+    
+    # Filter posts by score and keywords
+    filtered_posts = []
+    for post in posts:
+        if post['score'] >= min_score:  # Only include posts with minimum score
+            text = f"{post['title'].lower()} {post['selftext'].lower()}"
+            matching_keywords = [
+                keyword for keyword in PROBLEM_KEYWORDS 
+                if keyword.lower() in text
+            ]
+            if matching_keywords:
+                print_success(f"Found post with {post['score']} votes and keywords {matching_keywords}: {post['title'][:100]}...")
+                filtered_posts.append(post)
+    
+    # Sort posts by score in descending order
+    filtered_posts.sort(key=lambda x: x['score'], reverse=True)
+    print_success(f"Found {len(filtered_posts)} posts containing problem-related keywords (min score: {min_score})")
+    return filtered_posts
+
+async def analyze_problem_posts(subreddit: str, timeframe: str = 'week') -> List[Dict]:
+    """Main function to find and analyze problem-related posts."""
+    # Find posts with problem-related keywords
+    posts = await search_problem_posts(subreddit, timeframe)
+    if not posts:
+        return []
+    
+    # Analyze each post with all its comments
+    analyzed_posts = []
+    for post in posts:
+        analysis = await analyze_post_with_comments(post)
+        if analysis:
+            post['analysis'] = analysis
+            analyzed_posts.append(post)
+    
+    return analyzed_posts
+
+@app.post("/api/analyze-problems")
+async def analyze_problems(request: ProblemAnalysisRequest):
+    """Analyze problem-related posts in a subreddit."""
+    try:
+        if request.timeframe not in ['week', 'month', 'year']:
+            raise HTTPException(status_code=400, detail="Invalid timeframe. Must be 'week', 'month', or 'year'")
+        
+        # Calculate the time range we need
+        now = datetime.now(timezone.utc)
+        if request.timeframe == 'week':
+            start_time = now - timedelta(days=7)
+        elif request.timeframe == 'month':
+            start_time = now - timedelta(days=30)
+        else:  # year
+            start_time = now - timedelta(days=365)
+        
+        # Check if we have a recent search
+        last_search = await get_last_search(request.subreddit, request.timeframe)
+        existing_posts = []
+        needs_new_search = True
+        
+        if last_search:
+            last_search_time = datetime.fromisoformat(last_search['last_search_time'])
+            last_post_time = datetime.fromisoformat(last_search['last_post_time'])
+            
+            # Ensure timezone awareness
+            if last_search_time.tzinfo is None:
+                last_search_time = last_search_time.replace(tzinfo=timezone.utc)
+            if last_post_time.tzinfo is None:
+                last_post_time = last_post_time.replace(tzinfo=timezone.utc)
+            
+            # Get existing analyzed posts
+            print_step("Checking for existing analyzed posts...")
+            existing_posts = await get_analyzed_posts(request.subreddit, start_time)
+            
+            if existing_posts:
+                print_success(f"Found {len(existing_posts)} existing analyzed posts")
+                
+                # If the last search was very recent, we might not need a new search
+                if now - last_search_time < timedelta(hours=24):
+                    needs_new_search = False
+                    print_step("Last search was recent, using cached results")
+                else:
+                    # We have some results but need to search for newer posts
+                    print_step(f"Found previous search from {last_search_time.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+                    print_step("Will search for new posts since last search")
+                    start_time = last_post_time
+            else:
+                print_step("No existing analyzed posts found, will perform full search")
+        
+        new_posts = []
+        if needs_new_search:
+            # Search for new posts
+            print_step(f"Searching for new posts since {start_time.strftime('%Y-%m-%d %H:%M:%S %Z')}...")
+            filtered_posts = await search_problem_posts(request.subreddit, request.timeframe, request.min_score)
+            
+            if filtered_posts:
+                # Filter out posts we already have
+                existing_ids = {post['id'] for post in existing_posts}
+                new_posts = [post for post in filtered_posts if post['id'] not in existing_ids]
+                
+                if new_posts:
+                    print_step(f"Found {len(new_posts)} new problem-related posts to analyze")
+                    newest_post_time = None
+                    
+                    # Store and analyze each filtered post
+                    for post in new_posts:
+                        # Generate embedding for the post
+                        content = f"{post['title']}\n{post['selftext']}"
+                        embedding = await generate_embedding(content)
+                        
+                        if embedding:
+                            # Store the post and analyze it immediately
+                            success = await store_post_with_embedding(post, embedding)
+                            if success:
+                                print_success(f"Stored post: {post['title'][:100]}")
+                                
+                                # Analyze the post
+                                analysis = await analyze_post_with_comments(post)
+                                if analysis:
+                                    # Update the stored post with the analysis
+                                    await update_post_analysis(post['id'], analysis)
+                                    post['analysis'] = analysis
+                                    existing_posts.append(post)
+                                    print_success(f"Analyzed post: {post['title'][:100]}")
+                                
+                                # Track the newest post time
+                                post_time = datetime.fromtimestamp(post['created_utc'], tz=timezone.utc)
+                                if newest_post_time is None or post_time > newest_post_time:
+                                    newest_post_time = post_time
+                    
+                    # Update search history with the newest post time
+                    if newest_post_time:
+                        await update_search_history(request.subreddit, request.timeframe, newest_post_time)
+                else:
+                    print_step("No new problem-related posts found that weren't already analyzed")
+        
+        # Combine and sort all posts by score
+        all_posts = sorted(
+            existing_posts, 
+            key=lambda x: x.get('score', 0), 
+            reverse=True
+        )
+        
+        if not all_posts:
+            print_step("No posts found matching the criteria")
+        else:
+            print_success(f"Returning {len(all_posts)} total posts")
+            
+        return {
+            "status": "success",
+            "timeframe": request.timeframe,
+            "subreddit": request.subreddit,
+            "min_score": request.min_score,
+            "post_count": len(all_posts),
+            "data": all_posts,
+            "source": "mixed" if existing_posts and new_posts else "new" if new_posts else "cache"
+        }
+    except Exception as e:
+        print_error(f"Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     main() 
