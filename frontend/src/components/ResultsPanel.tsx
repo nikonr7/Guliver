@@ -37,7 +37,7 @@ export function ResultsPanel({
     "Scanning for problem discussions...",
     "Finding pain points and needs...",
     "Starting AI analysis (this takes a few minutes)...",
-    "Analyzing posts and all comments with GPT-4...",
+    "Analyzing posts and all comments with AI...",
     "Extracting actionable insights...",
     "Finalizing results..."
   ] : [
@@ -45,11 +45,11 @@ export function ResultsPanel({
     "Performing semantic search...",
     "Finding most relevant discussions...",
     "Starting AI analysis (this takes 2-3 minutes)...",
-    "Analyzing post 1/5 with GPT-4...",
-    "Analyzing post 2/5 with GPT-4...",
-    "Analyzing post 3/5 with GPT-4...",
-    "Analyzing post 4/5 with GPT-4...",
-    "Analyzing post 5/5 with GPT-4...",
+    "Analyzing post 1/5...",
+    "Analyzing post 2/5...",
+    "Analyzing post 3/5...",
+    "Analyzing post 4/5...",
+    "Analyzing post 5/5...",
     "Finalizing results..."
   ];
 
