@@ -146,11 +146,11 @@ async def fetch_posts_async(subreddit: str, size: int = 10) -> List[Dict]:
         return []
 
 async def analyze_text(text: str) -> str:
-    """Analyze text using OpenAI GPT-4 to extract market problems or startup ideas."""
-    print_step("Analyzing post with GPT-4...")
+    """Analyze text using AI to extract market problems or startup ideas."""
+    print_step("Analyzing post")
     try:
         response = await client.chat.completions.create(
-            model="gpt-4",
+            model="gpt-4o-mini-2024-07-18",
             messages=[
                 {"role": "system", "content": """You are an expert market research analyst and startup advisor. 
 Your task is to analyze discussions and identify:
@@ -170,7 +170,7 @@ Be precise, practical, and focus on actionable insights."""},
         print_success("Analysis completed successfully")
         return analysis
     except Exception as e:
-        print_error(f"Error during OpenAI analysis: {e}")
+        print_error(f"Error during analysis: {e}")
         return ""
 
 async def check_existing_analysis_async(post_id: str) -> tuple[bool, str]:
@@ -199,7 +199,7 @@ async def check_existing_analysis_async(post_id: str) -> tuple[bool, str]:
         return False, ""
 
 async def generate_embedding(text: str) -> List[float]:
-    """Generate embedding for text using OpenAI's text-embedding-ada-002."""
+    """Generate embedding for text using advanced text embedding model."""
     print_step("Generating embedding...")
     try:
         response = await client.embeddings.create(
@@ -504,10 +504,10 @@ async def analyze_post_with_comments(post: dict) -> str:
         for i, comment in enumerate(comments, 1):
             full_content += f"\nComment {i}:\n{comment}\n"
     
-    print_step("Analyzing post and comments with GPT-4...")
+    print_step("Analyzing post and comments...")
     try:
         response = await client.chat.completions.create(
-            model="gpt-4",
+            model="gpt-4o-mini-2024-07-18",
             messages=[
                 {"role": "system", "content": """You are an expert market research analyst and startup advisor. 
 Analyze both the main post and its comments to identify:
@@ -528,7 +528,7 @@ Focus on actionable insights and note when comments provide additional context o
         print_success("Analysis completed successfully")
         return analysis
     except Exception as e:
-        print_error(f"Error during OpenAI analysis: {e}")
+        print_error(f"Error during analysis: {e}")
         return ""
 
 async def smart_analysis_pipeline(
@@ -539,7 +539,7 @@ async def smart_analysis_pipeline(
     analyze_count: int = None,
     comment_limit: int = 5
 ):
-    """Smart pipeline that uses embeddings first, then GPT-4 only for relevant posts."""
+    """Smart pipeline that uses embeddings first, then advanced AI only for relevant posts."""
     print_step(f"Starting smart analysis for query: {query}")
     if subreddit:
         print_step(f"Searching in r/{subreddit}")
@@ -606,7 +606,7 @@ async def main_async():
                     
                     threshold = float(input(f"{Fore.GREEN}Enter similarity threshold (0.0-1.0, default: 0.7): {Style.RESET_ALL}").strip() or "0.7")
                     
-                    print(f"\n{Fore.CYAN}How many posts to analyze with GPT-4? (default: all matched posts):{Style.RESET_ALL}")
+                    print(f"\n{Fore.CYAN}How many posts to analyze? (default: all matched posts):{Style.RESET_ALL}")
                     analyze_input = input(f"{Fore.GREEN}> {Style.RESET_ALL}").strip()
                     analyze_count = int(analyze_input) if analyze_input else None
                     
@@ -914,9 +914,9 @@ async def new_interactive_workflow():
                     print(f"{Fore.YELLOW}Title:{Style.RESET_ALL} {post['title']}")
                     print(f"{Fore.YELLOW}Similarity Score:{Style.RESET_ALL} {post.get('similarity', 0):.2f}")
                     
-                    # Analyze with GPT-4 if not already analyzed
+                    # Analyze with AI if not already analyzed
                     if not post.get('analysis'):
-                        print(f"{Fore.YELLOW}Analyzing with GPT-4...{Style.RESET_ALL}")
+                        print(f"{Fore.YELLOW}Analyzing...{Style.RESET_ALL}")
                         analysis = await analyze_post_with_comments(post)
                         if analysis:
                             await update_post_analysis(post['id'], analysis)
@@ -1098,7 +1098,7 @@ async def get_subreddit_posts(
 
 @app.post("/api/smart-analysis")
 async def smart_analysis(request: SmartAnalysisRequest):
-    """Full smart analysis pipeline including comments and GPT-4 analysis."""
+    """Full smart analysis pipeline including comments and AI analysis."""
     try:
         results = await smart_analysis_pipeline(
             query=request.query,
