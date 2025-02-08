@@ -153,15 +153,15 @@ async def analyze_text(text: str) -> str:
             model="gpt-4o-mini-2024-07-18",
             messages=[
                 {"role": "system", "content": """You are an expert market research analyst and startup advisor. 
-Your task is to analyze discussions and identify:
+Your task is to analyze both the post and its comments to determine whether they present problems or opportunities for startups. Analyze all discussions to identify:
 1. Clear market opportunities and gaps
 2. Specific user pain points and problems
 3. Potential startup ideas or business solutions
 4. Market size indicators and trends
 5. Competitive landscape insights
 
-Be precise, practical, and focus on actionable insights."""},
-                {"role": "user", "content": f"Analyze this Reddit post and extract valuable market insights:\n\n{text}"}
+Pay special attention to user comments as they often provide validation of problems and additional context. Be precise, practical, and focus on actionable insights."""},
+                {"role": "user", "content": f"Analyze this Reddit post and its comments to extract valuable market insights:\n\n{text}"}
             ],
             max_tokens=500,
             temperature=0.6
