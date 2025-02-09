@@ -11,15 +11,38 @@ import asyncio
 from typing import List, Dict, Any, Optional
 from concurrent.futures import ThreadPoolExecutor
 import aiohttp
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
 import uvicorn
 from datetime import datetime, timedelta, timezone
+from fastapi import BackgroundTasks
 
 # Initialize FastAPI app
 app = FastAPI(title="Guliver API", version="1.0.0")
+
+# Store active search tasks
+active_tasks: Dict[str, asyncio.Task] = {}
+
+async def cancel_task(task_id: str):
+    """Cancel a running task by its ID."""
+    print_step(f"Attempting to cancel task {task_id}")
+    if task_id in active_tasks:
+        task = active_tasks[task_id]
+        print_step(f"Found task {task_id}, cancelling...")
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            print_success(f"Task {task_id} cancelled successfully")
+        except Exception as e:
+            print_error(f"Error while cancelling task {task_id}: {str(e)}")
+        finally:
+            active_tasks.pop(task_id, None)
+            print_success(f"Task {task_id} removed from active tasks")
+    else:
+        print_error(f"Task {task_id} not found in active tasks")
 
 # Configure CORS
 app.add_middleware(
@@ -971,6 +994,17 @@ class ProblemAnalysisRequest(BaseModel):
     timeframe: str = 'week'  # 'week', 'month', or 'year'
     min_score: int = 5  # Minimum score threshold
 
+    async def is_disconnected(self) -> bool:
+        """Check if the client has disconnected."""
+        try:
+            # Get the current request state from FastAPI
+            from fastapi import Request
+            request = Request.get_current()
+            return await request.is_disconnected()
+        except Exception:
+            # If we can't determine the state, assume connected
+            return False
+
 # Add new database model for search history
 class SearchHistory(BaseModel):
     subreddit: str
@@ -1231,126 +1265,165 @@ async def analyze_problem_posts(subreddit: str, timeframe: str = 'week') -> List
     return analyzed_posts
 
 @app.post("/api/analyze-problems")
-async def analyze_problems(request: ProblemAnalysisRequest):
+async def analyze_problems(request: ProblemAnalysisRequest, background_tasks: BackgroundTasks):
     """Analyze problem-related posts in a subreddit."""
-    try:
-        if request.timeframe not in ['week', 'month', 'year']:
-            raise HTTPException(status_code=400, detail="Invalid timeframe. Must be 'week', 'month', or 'year'")
-        
-        # Calculate the time range we need
-        now = datetime.now(timezone.utc)
-        if request.timeframe == 'week':
-            start_time = now - timedelta(days=7)
-        elif request.timeframe == 'month':
-            start_time = now - timedelta(days=30)
-        else:  # year
-            start_time = now - timedelta(days=365)
-        
-        # Check if we have a recent search
-        last_search = await get_last_search(request.subreddit, request.timeframe)
-        existing_posts = []
-        needs_new_search = True
-        
-        if last_search:
-            last_search_time = datetime.fromisoformat(last_search['last_search_time'])
-            last_post_time = datetime.fromisoformat(last_search['last_post_time'])
+    # Generate a unique task ID
+    task_id = str(int(time.time() * 1000))  # millisecond timestamp as ID
+    print_step(f"Creating new search task with ID: {task_id}")
+    
+    async def search_task():
+        try:
+            if request.timeframe not in ['week', 'month', 'year']:
+                raise HTTPException(status_code=400, detail="Invalid timeframe. Must be 'week', 'month', or 'year'")
             
-            # Ensure timezone awareness
-            if last_search_time.tzinfo is None:
-                last_search_time = last_search_time.replace(tzinfo=timezone.utc)
-            if last_post_time.tzinfo is None:
-                last_post_time = last_post_time.replace(tzinfo=timezone.utc)
+            # Calculate the time range we need
+            now = datetime.now(timezone.utc)
+            if request.timeframe == 'week':
+                start_time = now - timedelta(days=7)
+            elif request.timeframe == 'month':
+                start_time = now - timedelta(days=30)
+            else:  # year
+                start_time = now - timedelta(days=365)
             
-            # Get existing analyzed posts
-            print_step("Checking for existing analyzed posts...")
-            existing_posts = await get_analyzed_posts(request.subreddit, start_time)
+            # Check if we have a recent search
+            last_search = await get_last_search(request.subreddit, request.timeframe)
+            existing_posts = []
+            needs_new_search = True
             
-            if existing_posts:
-                print_success(f"Found {len(existing_posts)} existing analyzed posts")
+            if last_search:
+                last_search_time = datetime.fromisoformat(last_search['last_search_time'])
+                last_post_time = datetime.fromisoformat(last_search['last_post_time'])
                 
-                # If the last search was very recent, we might not need a new search
-                if now - last_search_time < timedelta(hours=24):
-                    needs_new_search = False
-                    print_step("Last search was recent, using cached results")
-                else:
-                    # We have some results but need to search for newer posts
-                    print_step(f"Found previous search from {last_search_time.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-                    print_step("Will search for new posts since last search")
-                    start_time = last_post_time
-            else:
-                print_step("No existing analyzed posts found, will perform full search")
-        
-        new_posts = []
-        if needs_new_search:
-            # Search for new posts
-            print_step(f"Searching for new posts since {start_time.strftime('%Y-%m-%d %H:%M:%S %Z')}...")
-            filtered_posts = await search_problem_posts(request.subreddit, request.timeframe, request.min_score)
-            
-            if filtered_posts:
-                # Filter out posts we already have
-                existing_ids = {post['id'] for post in existing_posts}
-                new_posts = [post for post in filtered_posts if post['id'] not in existing_ids]
+                # Ensure timezone awareness
+                if last_search_time.tzinfo is None:
+                    last_search_time = last_search_time.replace(tzinfo=timezone.utc)
+                if last_post_time.tzinfo is None:
+                    last_post_time = last_post_time.replace(tzinfo=timezone.utc)
                 
-                if new_posts:
-                    print_step(f"Found {len(new_posts)} new problem-related posts to analyze")
-                    newest_post_time = None
+                # Get existing analyzed posts
+                print_step("Checking for existing analyzed posts...")
+                existing_posts = await get_analyzed_posts(request.subreddit, start_time)
+                
+                if existing_posts:
+                    print_success(f"Found {len(existing_posts)} existing analyzed posts")
                     
-                    # Store and analyze each filtered post
-                    for post in new_posts:
-                        # Generate embedding for the post
-                        content = f"{post['title']}\n{post['selftext']}"
-                        embedding = await generate_embedding(content)
+                    # If the last search was very recent, we might not need a new search
+                    if now - last_search_time < timedelta(hours=24):
+                        needs_new_search = False
+                        print_step("Last search was recent, using cached results")
+                    else:
+                        # We have some results but need to search for newer posts
+                        print_step(f"Found previous search from {last_search_time.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+                        print_step("Will search for new posts since last search")
+                        start_time = last_post_time
+                else:
+                    print_step("No existing analyzed posts found, will perform full search")
+
+            new_posts = []
+            newest_post_time = None
+            
+            if needs_new_search:
+                print_step(f"Searching for new problem-related posts in r/{request.subreddit}...")
+                try:
+                    new_posts = await search_problem_posts(request.subreddit, request.timeframe, request.min_score)
+                    if new_posts:
+                        newest_post_time = max(
+                            datetime.fromtimestamp(post.get('created_utc', 0), tz=timezone.utc)
+                            for post in new_posts
+                        )
+                        print_success(f"Found {len(new_posts)} new problem-related posts")
                         
-                        if embedding:
-                            # Store the post and analyze it immediately
-                            success = await store_post_with_embedding(post, embedding)
-                            if success:
-                                print_success(f"Stored post: {post['title'][:100]}")
-                                
-                                # Analyze the post
-                                analysis = await analyze_post_with_comments(post)
-                                if analysis:
-                                    # Update the stored post with the analysis
-                                    await update_post_analysis(post['id'], analysis)
-                                    post['analysis'] = analysis
-                                    existing_posts.append(post)
-                                    print_success(f"Analyzed post: {post['title'][:100]}")
-                                
-                                # Track the newest post time
-                                post_time = datetime.fromtimestamp(post['created_utc'], tz=timezone.utc)
-                                if newest_post_time is None or post_time > newest_post_time:
-                                    newest_post_time = post_time
-                    
-                    # Update search history with the newest post time
-                    if newest_post_time:
-                        await update_search_history(request.subreddit, request.timeframe, newest_post_time)
-                else:
-                    print_step("No new problem-related posts found that weren't already analyzed")
-        
-        # Combine and sort all posts by score
-        all_posts = sorted(
-            existing_posts, 
-            key=lambda x: x.get('score', 0), 
-            reverse=True
-        )
-        
-        if not all_posts:
-            print_step("No posts found matching the criteria")
-        else:
-            print_success(f"Returning {len(all_posts)} total posts")
+                        # Update search history with the newest post time
+                        if newest_post_time:
+                            await update_search_history(request.subreddit, request.timeframe, newest_post_time)
+                    else:
+                        print_step("No new problem-related posts found that weren't already analyzed")
+                except Exception as e:
+                    print_error(f"Error during problem search: {str(e)}")
+                    # Continue with existing posts if available
+                    pass
+
+            # Combine and sort all posts by score
+            all_posts = sorted(
+                existing_posts + new_posts, 
+                key=lambda x: x.get('score', 0), 
+                reverse=True
+            )
             
+            if not all_posts:
+                print_step("No posts found matching the criteria")
+            else:
+                print_success(f"Returning {len(all_posts)} total posts")
+                
+            result = {
+                "status": "success",
+                "task_id": task_id,
+                "timeframe": request.timeframe,
+                "subreddit": request.subreddit,
+                "min_score": request.min_score,
+                "post_count": len(all_posts),
+                "data": all_posts,
+                "source": "mixed" if existing_posts and new_posts else "new" if new_posts else "cache"
+            }
+            return result
+        except asyncio.CancelledError:
+            print_step(f"Search task {task_id} was cancelled")
+            raise
+        except Exception as e:
+            print_error(f"Error in search task {task_id}: {str(e)}")
+            raise
+
+    # Create and store the task
+    task = asyncio.create_task(search_task())
+    active_tasks[task_id] = task
+    print_success(f"Task {task_id} created and stored")
+    
+    try:
+        # Return immediately with task ID
         return {
             "status": "success",
-            "timeframe": request.timeframe,
-            "subreddit": request.subreddit,
-            "min_score": request.min_score,
-            "post_count": len(all_posts),
-            "data": all_posts,
-            "source": "mixed" if existing_posts and new_posts else "new" if new_posts else "cache"
+            "task_id": task_id,
+            "message": "Search started"
         }
     except Exception as e:
-        print_error(f"Error: {str(e)}")
+        print_error(f"Error starting task {task_id}: {str(e)}")
+        active_tasks.pop(task_id, None)
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/analyze-problems/{task_id}/status")
+async def get_search_status(task_id: str):
+    """Get the status of a search task."""
+    print_step(f"Checking status of task {task_id}")
+    if task_id in active_tasks:
+        task = active_tasks[task_id]
+        if task.done():
+            try:
+                result = await task
+                # Only remove the task after successfully getting the result
+                active_tasks.pop(task_id, None)
+                print_success(f"Task {task_id} completed and cleaned up")
+                return result
+            except asyncio.CancelledError:
+                active_tasks.pop(task_id, None)
+                return {"status": "cancelled", "task_id": task_id}
+            except Exception as e:
+                active_tasks.pop(task_id, None)
+                return {"status": "error", "task_id": task_id, "error": str(e)}
+        else:
+            return {"status": "running", "task_id": task_id}
+    else:
+        raise HTTPException(status_code=404, detail="Search task not found")
+
+@app.post("/api/analyze-problems/stop/{task_id}")
+async def stop_search(task_id: str):
+    """Stop an ongoing search task."""
+    print_step(f"Received stop request for task {task_id}")
+    if task_id in active_tasks:
+        await cancel_task(task_id)
+        return {"status": "cancelled", "task_id": task_id}
+    else:
+        print_error(f"Task {task_id} not found")
+        raise HTTPException(status_code=404, detail="Search task not found")
 
 if __name__ == "__main__":
     main() 
