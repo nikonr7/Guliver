@@ -1247,10 +1247,10 @@ async def search_problem_posts(subreddit: str, timeframe: str = 'week', min_scor
     print_success(f"Found {len(filtered_posts)} posts containing problem-related keywords (min score: {min_score})")
     return filtered_posts
 
-async def analyze_problem_posts(subreddit: str, timeframe: str = 'week') -> List[Dict]:
+async def analyze_problem_posts(subreddit: str, timeframe: str = 'week', min_score: int = 5) -> List[Dict]:
     """Main function to find and analyze problem-related posts."""
     # Find posts with problem-related keywords
-    posts = await search_problem_posts(subreddit, timeframe)
+    posts = await search_problem_posts(subreddit, timeframe, min_score)
     if not posts:
         return []
     
@@ -1325,13 +1325,24 @@ async def analyze_problems(request: ProblemAnalysisRequest, background_tasks: Ba
             if needs_new_search:
                 print_step(f"Searching for new problem-related posts in r/{request.subreddit}...")
                 try:
-                    new_posts = await search_problem_posts(request.subreddit, request.timeframe, request.min_score)
+                    # Pass min_score to analyze_problem_posts
+                    new_posts = await analyze_problem_posts(
+                        request.subreddit, 
+                        request.timeframe,
+                        request.min_score
+                    )
                     if new_posts:
                         newest_post_time = max(
                             datetime.fromtimestamp(post.get('created_utc', 0), tz=timezone.utc)
                             for post in new_posts
                         )
-                        print_success(f"Found {len(new_posts)} new problem-related posts")
+                        print_success(f"Found and analyzed {len(new_posts)} new problem-related posts")
+                        
+                        # Store the analyzed posts
+                        for post in new_posts:
+                            if post.get('analysis'):
+                                await update_post_analysis(post['id'], post['analysis'])
+                                print_success(f"Analysis stored for post {post['id']}")
                         
                         # Update search history with the newest post time
                         if newest_post_time:
