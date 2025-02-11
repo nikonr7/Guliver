@@ -96,11 +96,20 @@ async def update_search_history(subreddit: str, timeframe: str, last_post_time: 
             .eq("timeframe", timeframe)\
             .execute()
         
+        # Format timestamps in PostgreSQL compatible ISO 8601 format
+        # Format: YYYY-MM-DD"T"HH24:MI:SS.MSOF
+        def format_timestamp(dt: datetime) -> str:
+            # Ensure UTC timezone
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            # Format with 6 digits for microseconds and explicit +00:00 timezone
+            return dt.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+00:00'
+
         data = {
             "subreddit": subreddit,
             "timeframe": timeframe,
-            "last_search_time": now.isoformat(),
-            "last_post_time": last_post_time.replace(tzinfo=timezone.utc).isoformat()
+            "last_search_time": format_timestamp(now),
+            "last_post_time": format_timestamp(last_post_time)
         }
         
         if existing.data and len(existing.data) > 0:
