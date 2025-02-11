@@ -79,7 +79,6 @@ async def analyze_problems(request: ProblemAnalysisRequest, background_tasks: Ba
                     # Parse PostgreSQL ISO 8601 timestamps
                     # Format: YYYY-MM-DD"T"HH24:MI:SS.MSOF
                     def parse_timestamp(ts_str: str) -> datetime:
-                        # Handle both with and without milliseconds
                         try:
                             # Try parsing with milliseconds
                             dt = datetime.strptime(ts_str, '%Y-%m-%dT%H:%M:%S.%f+00:00')
@@ -91,27 +90,27 @@ async def analyze_problems(request: ProblemAnalysisRequest, background_tasks: Ba
                     last_search_time = parse_timestamp(last_search_time_str)
                     last_post_time = parse_timestamp(last_post_time_str)
                     
-                except (ValueError, KeyError) as e:
-                    print_error(f"Error parsing timestamps: {str(e)}")
-                    # Continue with a new search if timestamp parsing fails
-                    last_search_time = now
-                    last_post_time = now
-                
-                # Get existing analyzed posts
-                print_step("Checking for existing analyzed posts...")
-                existing_posts = await get_analyzed_posts(request.subreddit, start_time)
-                
-                if existing_posts:
-                    print_success(f"Found {len(existing_posts)} existing analyzed posts")
-                    
-                    # If the last search was very recent, we might not need a new search
+                    # Check if cache is fresh (less than 24 hours old)
                     if now - last_search_time < timedelta(hours=24):
                         needs_new_search = False
                         print_step("Last search was recent, using cached results")
+                    
+                except (ValueError, KeyError) as e:
+                    print_error(f"Error parsing timestamps: {str(e)}")
+                    # Explicitly invalidate cache on timestamp parsing error
+                    last_search_time = now
+                    last_post_time = now
+                    needs_new_search = True
+                
+                # Get existing analyzed posts regardless of cache freshness
+                print_step("Checking for existing analyzed posts...")
+                existing_posts = await get_analyzed_posts(request.subreddit, start_time)
+                if existing_posts:
+                    print_success(f"Found {len(existing_posts)} existing analyzed posts")
+                else:
+                    print_step("No existing posts found in cache")
             
             new_posts = []
-            newest_post_time = None
-            
             if needs_new_search:
                 print_step(f"Searching for new problem-related posts in r/{request.subreddit}...")
                 try:
@@ -120,18 +119,22 @@ async def analyze_problems(request: ProblemAnalysisRequest, background_tasks: Ba
                         request.timeframe,
                         request.min_score
                     )
+                    
+                    # Always update search history after a new search
+                    newest_post_time = now
                     if new_posts:
+                        # If we found posts, use the newest post time
                         newest_post_time = max(
                             datetime.fromtimestamp(post.get('created_utc', 0), tz=timezone.utc)
                             for post in new_posts
                         )
                         print_success(f"Found and analyzed {len(new_posts)} new problem-related posts")
-                        
-                        # Update search history with the newest post time
-                        if newest_post_time:
-                            await update_search_history(request.subreddit, request.timeframe, newest_post_time)
                     else:
                         print_step("No new problem-related posts found")
+                    
+                    # Update search history regardless of whether posts were found
+                    await update_search_history(request.subreddit, request.timeframe, newest_post_time)
+                    
                 except Exception as e:
                     print_error(f"Error during problem search: {str(e)}")
                     # Continue with existing posts if available
@@ -144,6 +147,9 @@ async def analyze_problems(request: ProblemAnalysisRequest, background_tasks: Ba
                 reverse=True
             )
             
+            if not all_posts:
+                print_step("No posts found (neither in cache nor from new search)")
+            
             return {
                 "status": "success",
                 "task_id": task_id,
@@ -152,7 +158,12 @@ async def analyze_problems(request: ProblemAnalysisRequest, background_tasks: Ba
                 "min_score": request.min_score,
                 "post_count": len(all_posts),
                 "data": all_posts,
-                "source": "mixed" if existing_posts and new_posts else "new" if new_posts else "cache"
+                "source": "mixed" if existing_posts and new_posts else "new" if new_posts else "cache",
+                "cache_used": not needs_new_search,
+                "cache_stats": {
+                    "cached_posts_count": len(existing_posts),
+                    "new_posts_count": len(new_posts)
+                }
             }
         except Exception as e:
             print_error(f"Error in search task {task_id}: {str(e)}")

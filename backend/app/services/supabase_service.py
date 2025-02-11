@@ -53,15 +53,21 @@ async def update_post_analysis(post_id: str, analysis: str) -> bool:
 async def get_analyzed_posts(subreddit: str, since_time: datetime) -> List[Dict]:
     """Get already analyzed posts from database."""
     try:
+        print_step(f"Querying posts for r/{subreddit} since {since_time.isoformat()}")
         result = supabase.table("reddit_posts")\
             .select("*")\
-            .eq("subreddit", subreddit)\
+            .filter('subreddit', 'ilike', subreddit)\
             .gte("created_at", since_time.isoformat())\
             .not_.is_("analysis", "null")\
             .order("score", desc=True)\
             .execute()
         
-        return result.data if result.data else []
+        if not result.data:
+            print_step(f"No analyzed posts found for r/{subreddit}")
+            return []
+        
+        print_success(f"Retrieved {len(result.data)} posts from database")
+        return result.data
     except Exception as e:
         print_error(f"Error getting analyzed posts: {e}")
         return []
@@ -71,7 +77,7 @@ async def get_last_search(subreddit: str, timeframe: str) -> Optional[Dict]:
     try:
         result = supabase.table("search_history")\
             .select("*")\
-            .eq("subreddit", subreddit)\
+            .filter('subreddit', 'ilike', subreddit)\
             .eq("timeframe", timeframe)\
             .order("last_search_time", desc=True)\
             .limit(1)\
@@ -92,7 +98,7 @@ async def update_search_history(subreddit: str, timeframe: str, last_post_time: 
         # First try to get existing record
         existing = supabase.table("search_history")\
             .select("*")\
-            .eq("subreddit", subreddit)\
+            .filter('subreddit', 'ilike', subreddit)\
             .eq("timeframe", timeframe)\
             .execute()
         
@@ -105,8 +111,11 @@ async def update_search_history(subreddit: str, timeframe: str, last_post_time: 
             # Format with 6 digits for microseconds and explicit +00:00 timezone
             return dt.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + '+00:00'
 
+        # Normalize subreddit case to be consistent
+        normalized_subreddit = subreddit.lower()
+        
         data = {
-            "subreddit": subreddit,
+            "subreddit": normalized_subreddit,
             "timeframe": timeframe,
             "last_search_time": format_timestamp(now),
             "last_post_time": format_timestamp(last_post_time)
@@ -116,7 +125,7 @@ async def update_search_history(subreddit: str, timeframe: str, last_post_time: 
             # Update existing record
             result = supabase.table("search_history")\
                 .update(data)\
-                .eq("subreddit", subreddit)\
+                .eq("subreddit", normalized_subreddit)\
                 .eq("timeframe", timeframe)\
                 .execute()
         else:
