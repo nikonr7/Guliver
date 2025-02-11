@@ -71,8 +71,31 @@ async def analyze_problems(request: ProblemAnalysisRequest, background_tasks: Ba
             needs_new_search = True
             
             if last_search:
-                last_search_time = datetime.fromisoformat(last_search['last_search_time'])
-                last_post_time = datetime.fromisoformat(last_search['last_post_time'])
+                try:
+                    # Get the timestamp strings from the search history
+                    last_search_time_str = last_search['last_search_time']
+                    last_post_time_str = last_search['last_post_time']
+                    
+                    # Parse PostgreSQL ISO 8601 timestamps
+                    # Format: YYYY-MM-DD"T"HH24:MI:SS.MSOF
+                    def parse_timestamp(ts_str: str) -> datetime:
+                        # Handle both with and without milliseconds
+                        try:
+                            # Try parsing with milliseconds
+                            dt = datetime.strptime(ts_str, '%Y-%m-%dT%H:%M:%S.%f+00:00')
+                        except ValueError:
+                            # Try without milliseconds
+                            dt = datetime.strptime(ts_str, '%Y-%m-%dT%H:%M:%S+00:00')
+                        return dt.replace(tzinfo=timezone.utc)
+                    
+                    last_search_time = parse_timestamp(last_search_time_str)
+                    last_post_time = parse_timestamp(last_post_time_str)
+                    
+                except (ValueError, KeyError) as e:
+                    print_error(f"Error parsing timestamps: {str(e)}")
+                    # Continue with a new search if timestamp parsing fails
+                    last_search_time = now
+                    last_post_time = now
                 
                 # Get existing analyzed posts
                 print_step("Checking for existing analyzed posts...")
