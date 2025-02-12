@@ -116,16 +116,22 @@ async def _fetch_and_search_posts(
     """Fetch new posts and search for similar ones."""
     print_step(f"Fetching new posts...")
     
+    # Generate query embedding in parallel with post fetching
+    query_embedding_task = generate_embedding(query)
+    
     if subreddit:
         # Single subreddit search
-        await process_subreddit_posts(subreddit, 100)
-        similar_posts = await semantic_search_with_offset(query, subreddit, min_similarity, max_posts)
+        posts_task = process_subreddit_posts(subreddit, 100)
+        # Wait for both tasks
+        query_embedding, _ = await asyncio.gather(query_embedding_task, posts_task)
+        similar_posts = await semantic_search_with_offset(query, subreddit, min_similarity, max_posts, query_embedding)
     else:
         # Multi-subreddit search
-        default_subreddits = ["startups", "Entrepreneur", "SaaS"]  # Add your default subreddits
-        await fetch_and_filter_posts(default_subreddits, 100)
-        # Search across all subreddits
-        similar_posts = await semantic_search_with_offset(query, None, min_similarity, max_posts)
+        default_subreddits = ["startups", "Entrepreneur", "SaaS"]
+        posts_task = fetch_and_filter_posts(default_subreddits, 100)
+        # Wait for both tasks
+        query_embedding, _ = await asyncio.gather(query_embedding_task, posts_task)
+        similar_posts = await semantic_search_with_offset(query, None, min_similarity, max_posts, query_embedding)
     
     if not similar_posts:
         print_error("No similar posts found")
@@ -144,44 +150,48 @@ async def _process_posts_analysis(posts: List[Dict], batch_size: int) -> None:
     if not posts_needing_analysis:
         return
 
-    print_step(f"Fetching comments for {len(posts_needing_analysis)} posts...")
-    posts_with_comments = await _fetch_comments_parallel(posts_needing_analysis)
-    
-    batches = [posts_with_comments[i:i + batch_size] 
-               for i in range(0, len(posts_with_comments), batch_size)]
-    
-    print_step(f"Analyzing {len(posts_needing_analysis)} posts in {len(batches)} batches...")
-    analyses = await _analyze_batches_parallel(batches, batch_size)
-    
-    await _update_database_parallel(posts_needing_analysis, analyses)
-
-async def _fetch_comments_parallel(posts: List[Dict]) -> List[Dict]:
-    """Fetch comments for multiple posts in parallel."""
-    async def fetch_post_comments(post):
-        post['comments'] = await fetch_comments_async(post['id'])
+    # Fetch comments and generate embeddings for all posts in parallel
+    async def prepare_post(post):
+        comments_task = fetch_comments_async(post['id'])
+        content = post['title'] + "\n" + post.get('selftext', '')
+        embedding_task = generate_embedding(content)
+        
+        post['comments'], post['embedding'] = await asyncio.gather(comments_task, embedding_task)
         return post
     
-    return await asyncio.gather(*[fetch_post_comments(post) for post in posts])
-
-async def _analyze_batches_parallel(batches: List[List[Dict]], batch_size: int) -> List[str]:
-    """Analyze multiple batches of posts in parallel."""
-    batch_results = await asyncio.gather(
-        *[analyze_posts_batch(batch, batch_size) for batch in batches]
-    )
-    return [analysis for batch_analysis in batch_results for analysis in batch_analysis]
-
-async def _update_database_parallel(posts: List[Dict], analyses: List[str]) -> None:
-    """Update database with analyses in parallel."""
-    async def update_post_with_analysis(post, analysis):
-        if analysis:
-            await update_post_analysis(post['id'], analysis)
-            post['analysis'] = analysis
-            print_success(f"Analysis completed for post {post['id']}")
+    print_step(f"Preparing {len(posts_needing_analysis)} posts (fetching comments and generating embeddings)...")
+    prepared_posts = await asyncio.gather(*[prepare_post(post) for post in posts_needing_analysis])
     
-    await asyncio.gather(
-        *[update_post_with_analysis(post, analysis) 
-          for post, analysis in zip(posts, analyses)]
-    )
+    # Filter out posts where embedding generation failed
+    valid_posts = [post for post in prepared_posts if post.get('embedding')]
+    
+    if not valid_posts:
+        print_error("No valid posts to analyze after preparation")
+        return
+    
+    # Process in batches
+    batches = [valid_posts[i:i + batch_size] for i in range(0, len(valid_posts), batch_size)]
+    print_step(f"Analyzing {len(valid_posts)} posts in {len(batches)} batches...")
+    
+    # Process each batch in parallel and store results immediately
+    async def process_batch(batch):
+        analyses = await analyze_posts_batch(batch, batch_size)
+        # Store results for this batch immediately
+        store_tasks = []
+        for post, analysis in zip(batch, analyses):
+            if analysis:
+                store_tasks.append(
+                    store_post_with_embedding(post, post['embedding'], analysis)
+                )
+                post['analysis'] = analysis
+        
+        if store_tasks:
+            results = await asyncio.gather(*store_tasks)
+            successful = sum(1 for r in results if r)
+            print_success(f"Stored {successful}/{len(store_tasks)} posts from batch")
+    
+    # Process all batches concurrently
+    await asyncio.gather(*[process_batch(batch) for batch in batches])
 
 async def analyze_problem_posts(subreddit: str, timeframe: str = 'week', min_score: int = 5) -> List[Dict]:
     """Find and analyze problem-related posts."""
