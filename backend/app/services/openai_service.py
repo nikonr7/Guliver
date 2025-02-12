@@ -110,3 +110,60 @@ async def batch_generate_embeddings(texts: List[str], batch_size: int = 20) -> L
         
     print_success(f"Total embeddings generated: {len(all_embeddings)}")
     return all_embeddings 
+
+async def analyze_posts_batch(posts: List[dict], batch_size: int = 5) -> List[str]:
+    """Analyze multiple posts in a single batch to improve performance."""
+    print_step(f"Analyzing batch of {len(posts)} posts")
+    try:
+        # Prepare all posts content
+        posts_content = []
+        for i, post in enumerate(posts, 1):
+            content = f"POST {i}:\nTitle: {post['title']}\nContent: {post.get('selftext', '')}\n\n"
+            if 'comments' in post:
+                content += "Comments:\n"
+                for j, comment in enumerate(post['comments'], 1):
+                    content += f"Comment {j}: {comment}\n"
+            posts_content.append(content)
+
+        # Split posts into batches
+        batches = [posts_content[i:i + batch_size] for i in range(0, len(posts_content), batch_size)]
+        all_analyses = []
+
+        for batch in batches:
+            batch_content = "\n---\n".join(batch)
+            response = await openai_client.chat.completions.create(
+                model="gpt-4o-mini-2024-07-18",
+                messages=[
+                    {"role": "system", "content": """You are an expert market research analyst and startup advisor. 
+Your task is to analyze multiple posts and their comments to determine whether they present problems or opportunities for startups.
+For each post, provide a separate analysis that identifies:
+1. Clear market opportunities and gaps
+2. Specific user pain points and problems
+3. Potential startup ideas or business solutions
+4. Market size indicators and trends
+5. Competitive landscape insights
+
+Format your response as:
+[POST 1]
+<your analysis for post 1>
+
+[POST 2]
+<your analysis for post 2>
+
+And so on for each post. Be precise, practical, and focus on actionable insights."""},
+                    {"role": "user", "content": f"Analyze these Reddit posts and their comments to extract valuable market insights:\n\n{batch_content}"}
+                ],
+                max_tokens=1000 * len(batch),  # Scale tokens based on batch size
+                temperature=0.6
+            )
+            
+            # Split the response into individual post analyses
+            analysis = response.choices[0].message.content.strip()
+            post_analyses = analysis.split('[POST')[1:]  # Split by [POST and remove empty first element
+            all_analyses.extend([a.split(']', 1)[1].strip() for a in post_analyses])
+
+        print_success(f"Successfully analyzed {len(posts)} posts in {len(batches)} batches")
+        return all_analyses
+    except Exception as e:
+        print_error(f"Error during batch analysis: {e}")
+        return [""] * len(posts)  # Return empty analyses for all posts in case of error 

@@ -1,8 +1,8 @@
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta, timezone
 from ..utils.logging import print_step, print_success, print_error
-from .reddit import fetch_posts_async, fetch_posts_by_timeframe
-from .openai_service import analyze_post_with_comments, generate_embedding
+from .reddit import fetch_posts_async, fetch_posts_by_timeframe, fetch_comments_async
+from .openai_service import analyze_post_with_comments, generate_embedding, analyze_posts_batch
 from .supabase_service import (
     store_post_with_embedding,
     update_post_analysis,
@@ -11,11 +11,11 @@ from .supabase_service import (
     update_search_history,
     semantic_search_with_offset
 )
+import asyncio
+from ..utils.task_manager import task_manager
 
 async def process_subreddit_posts(subreddit: str, post_limit: int) -> int:
     """Process posts from a single subreddit."""
-    successful_posts = 0
-    
     print_step(f"Processing r/{subreddit}...")
     posts = await fetch_posts_async(subreddit, size=post_limit)
     
@@ -25,24 +25,30 @@ async def process_subreddit_posts(subreddit: str, post_limit: int) -> int:
     
     print_success(f"Found {len(posts)} posts")
     
-    # Process posts one by one
-    for post in posts:
-        # Check if post exists and has analysis
-        exists = await get_analyzed_posts(subreddit, datetime.fromtimestamp(post['created_utc']))
-        if exists:
-            successful_posts += 1
-            continue
-        
-        # Generate embedding
-        content = post.get('title', '') + "\n" + post.get('selftext', '')
-        embedding = await generate_embedding(content)
-        
-        if not embedding:
-            continue
-        
-        # Store post with embedding
-        if await store_post_with_embedding(post, embedding):
-            successful_posts += 1
+    # Process posts in parallel
+    async def process_single_post(post):
+        try:
+            # Check if post exists and has analysis
+            exists = await get_analyzed_posts(subreddit, datetime.fromtimestamp(post['created_utc']))
+            if exists:
+                return True
+            
+            # Generate embedding
+            content = post.get('title', '') + "\n" + post.get('selftext', '')
+            embedding = await generate_embedding(content)
+            
+            if not embedding:
+                return False
+            
+            # Store post with embedding
+            return await store_post_with_embedding(post, embedding)
+        except Exception as e:
+            print_error(f"Error processing post {post.get('id')}: {str(e)}")
+            return False
+    
+    # Process all posts concurrently
+    results = await asyncio.gather(*[process_single_post(post) for post in posts])
+    successful_posts = sum(1 for result in results if result)
     
     return successful_posts
 
@@ -66,39 +72,105 @@ async def smart_analysis_pipeline(
     min_similarity: float = 0.7, 
     max_posts: int = 5, 
     analyze_count: Optional[int] = None,
-    comment_limit: int = 5
+    comment_limit: int = 5,
+    batch_size: int = 5,
+    user_id: Optional[str] = None,
+    task_id: Optional[str] = None
 ) -> List[Dict]:
     """Smart pipeline that uses embeddings first, then advanced AI only for relevant posts."""
-    print_step(f"Starting smart analysis for query: {query}")
-    if subreddit:
-        print_step(f"Searching in r/{subreddit}")
-    
-    # First, fetch and store new posts to ensure fresh data
+    try:
+        print_step(f"Starting smart analysis for query: {query}")
+        if subreddit:
+            print_step(f"Searching in r/{subreddit}")
+        
+        await _update_task_status(task_id, 'processing')
+        similar_posts = await _fetch_and_search_posts(query, subreddit, min_similarity, max_posts)
+        
+        if not similar_posts:
+            return []
+        
+        posts_to_analyze = _get_posts_to_analyze(similar_posts, analyze_count)
+        await _process_posts_analysis(posts_to_analyze, batch_size)
+        
+        return similar_posts
+    except Exception as e:
+        print_error(f"Error in smart analysis pipeline: {str(e)}")
+        await _update_task_status(task_id, 'failed', str(e))
+        raise
+
+async def _update_task_status(task_id: Optional[str], status: str, error: str = None) -> None:
+    """Update task status if task_id is provided."""
+    if task_id and task_id in task_manager.tasks:
+        task_manager.tasks[task_id]['status'] = status
+        if error:
+            task_manager.tasks[task_id]['error'] = error
+
+async def _fetch_and_search_posts(
+    query: str,
+    subreddit: str,
+    min_similarity: float,
+    max_posts: int
+) -> List[Dict]:
+    """Fetch new posts and search for similar ones."""
     print_step(f"Fetching new posts from r/{subreddit}...")
-    await process_subreddit_posts(subreddit, 100)  # Fetch 100 posts to have a good pool
+    await process_subreddit_posts(subreddit, 100)
     
-    # Find similar posts using vector search
     similar_posts = await semantic_search_with_offset(query, subreddit, min_similarity, max_posts)
     if not similar_posts:
         print_error("No similar posts found")
         return []
     
     print_success(f"Found {len(similar_posts)} relevant posts")
-    
-    # If analyze_count is specified, only analyze that many posts
-    posts_to_analyze = similar_posts[:analyze_count] if analyze_count else similar_posts
-    
-    # Analyze relevant posts that haven't been analyzed yet
-    for i, post in enumerate(posts_to_analyze):
-        if not post.get('analysis'):
-            print_step(f"Analyzing post {i+1}/{len(posts_to_analyze)}: {post['title'][:100]}...")
-            analysis = await analyze_post_with_comments(post)
-            if analysis:
-                await update_post_analysis(post['id'], analysis)
-                post['analysis'] = analysis
-                print_success(f"Analysis completed for post {post['id']}")
-    
     return similar_posts
+
+def _get_posts_to_analyze(posts: List[Dict], analyze_count: Optional[int]) -> List[Dict]:
+    """Get subset of posts that need analysis."""
+    return posts[:analyze_count] if analyze_count else posts
+
+async def _process_posts_analysis(posts: List[Dict], batch_size: int) -> None:
+    """Process posts analysis in parallel batches."""
+    posts_needing_analysis = [post for post in posts if not post.get('analysis')]
+    if not posts_needing_analysis:
+        return
+
+    print_step(f"Fetching comments for {len(posts_needing_analysis)} posts...")
+    posts_with_comments = await _fetch_comments_parallel(posts_needing_analysis)
+    
+    batches = [posts_with_comments[i:i + batch_size] 
+               for i in range(0, len(posts_with_comments), batch_size)]
+    
+    print_step(f"Analyzing {len(posts_needing_analysis)} posts in {len(batches)} batches...")
+    analyses = await _analyze_batches_parallel(batches, batch_size)
+    
+    await _update_database_parallel(posts_needing_analysis, analyses)
+
+async def _fetch_comments_parallel(posts: List[Dict]) -> List[Dict]:
+    """Fetch comments for multiple posts in parallel."""
+    async def fetch_post_comments(post):
+        post['comments'] = await fetch_comments_async(post['id'])
+        return post
+    
+    return await asyncio.gather(*[fetch_post_comments(post) for post in posts])
+
+async def _analyze_batches_parallel(batches: List[List[Dict]], batch_size: int) -> List[str]:
+    """Analyze multiple batches of posts in parallel."""
+    batch_results = await asyncio.gather(
+        *[analyze_posts_batch(batch, batch_size) for batch in batches]
+    )
+    return [analysis for batch_analysis in batch_results for analysis in batch_analysis]
+
+async def _update_database_parallel(posts: List[Dict], analyses: List[str]) -> None:
+    """Update database with analyses in parallel."""
+    async def update_post_with_analysis(post, analysis):
+        if analysis:
+            await update_post_analysis(post['id'], analysis)
+            post['analysis'] = analysis
+            print_success(f"Analysis completed for post {post['id']}")
+    
+    await asyncio.gather(
+        *[update_post_with_analysis(post, analysis) 
+          for post, analysis in zip(posts, analyses)]
+    )
 
 async def analyze_problem_posts(subreddit: str, timeframe: str = 'week', min_score: int = 5) -> List[Dict]:
     """Find and analyze problem-related posts."""
@@ -115,27 +187,40 @@ async def analyze_problem_posts(subreddit: str, timeframe: str = 'week', min_sco
             print_step(f"No posts found with score >= {min_score}")
             return []
         
-        # Analyze each post with all its comments
-        analyzed_posts = []
-        for post in scored_posts:
+        # Process posts in parallel
+        async def process_post(post):
             try:
-                print_step(f"Analyzing post: {post['title'][:100]}...")
+                print_step(f"Processing post: {post['title'][:100]}...")
+                # Fetch comments
+                comments = await fetch_comments_async(post['id'])
+                post['comments'] = comments
+                
+                # Analyze post with comments
                 analysis = await analyze_post_with_comments(post)
-                if analysis:
-                    post['analysis'] = analysis
-                    # Generate embedding for the post content
-                    content = post['title'] + "\n" + post.get('selftext', '')
-                    embedding = await generate_embedding(content)
-                    if embedding:
-                        # Store the post with analysis and embedding
-                        if await store_post_with_embedding(post, embedding, analysis):
-                            analyzed_posts.append(post)
-                            print_success(f"Stored post with analysis: {post['id']}")
-                    else:
-                        print_error(f"Failed to generate embedding for post: {post['id']}")
+                if not analysis:
+                    return None
+                
+                post['analysis'] = analysis
+                
+                # Generate embedding
+                content = post['title'] + "\n" + post.get('selftext', '')
+                embedding = await generate_embedding(content)
+                if not embedding:
+                    return None
+                
+                # Store post with analysis and embedding
+                if await store_post_with_embedding(post, embedding, analysis):
+                    print_success(f"Stored post with analysis: {post['id']}")
+                    return post
+                
+                return None
             except Exception as e:
                 print_error(f"Error processing post {post.get('id')}: {str(e)}")
-                continue
+                return None
+        
+        # Process all posts concurrently
+        results = await asyncio.gather(*[process_post(post) for post in scored_posts])
+        analyzed_posts = [post for post in results if post is not None]
         
         return analyzed_posts
     except Exception as e:
