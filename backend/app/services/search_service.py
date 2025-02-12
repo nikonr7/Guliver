@@ -33,7 +33,7 @@ async def process_subreddit_posts(subreddit: str, post_limit: int) -> int:
             if exists:
                 return True
             
-            # Generate embedding
+            # Generate embedding and store post in parallel
             content = post.get('title', '') + "\n" + post.get('selftext', '')
             embedding = await generate_embedding(content)
             
@@ -202,9 +202,17 @@ async def analyze_problem_posts(subreddit: str, timeframe: str = 'week', min_sco
         async def process_post(post):
             try:
                 print_step(f"Processing post: {post['title'][:100]}...")
-                # Fetch comments
-                comments = await fetch_comments_async(post['id'])
-                post['comments'] = comments
+                
+                # Fetch comments and generate embedding in parallel
+                comments_task = fetch_comments_async(post['id'])
+                content = post['title'] + "\n" + post.get('selftext', '')
+                embedding_task = generate_embedding(content)
+                
+                # Wait for both tasks to complete
+                post['comments'], embedding = await asyncio.gather(comments_task, embedding_task)
+                
+                if not embedding:
+                    return None
                 
                 # Analyze post with comments
                 analysis = await analyze_post_with_comments(post)
@@ -212,12 +220,6 @@ async def analyze_problem_posts(subreddit: str, timeframe: str = 'week', min_sco
                     return None
                 
                 post['analysis'] = analysis
-                
-                # Generate embedding
-                content = post['title'] + "\n" + post.get('selftext', '')
-                embedding = await generate_embedding(content)
-                if not embedding:
-                    return None
                 
                 # Store post with analysis and embedding
                 if await store_post_with_embedding(post, embedding, analysis):
