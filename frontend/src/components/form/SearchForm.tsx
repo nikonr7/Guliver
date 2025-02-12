@@ -1,4 +1,5 @@
 "use client";
+import useProblemSearch from "@/hooks/useProblemSearch";
 import { SubmitHandler, useForm } from "react-hook-form";
 
 interface FormData {
@@ -14,8 +15,10 @@ const SearchForm = () => {
     formState: { errors, isValid },
   } = useForm<FormData>();
 
+  const { mutate } = useProblemSearch();
+
   const onSubmit: SubmitHandler<FormData> = (data) => {
-    console.log(data);
+    mutate(data);
   };
 
   return (

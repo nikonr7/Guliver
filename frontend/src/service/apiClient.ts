@@ -19,3 +19,5 @@ class ApiClient<T> {
     return axiosInstance.post(this.path, data);
   };
 }
+
+export default ApiClient;
