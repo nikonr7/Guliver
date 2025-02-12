@@ -114,10 +114,10 @@ async def fetch_posts_by_timeframe(subreddit: str, timeframe: str = 'week', size
         'Authorization': f'Bearer {token}'
     }
 
-    all_posts = []
     seen_ids = set()
+    all_posts = []
 
-    for keyword in PROBLEM_KEYWORDS:
+    async def search_keyword(keyword: str):
         print_step(f"Searching for keyword: {keyword}")
         try:
             url = f"https://oauth.reddit.com/r/{subreddit}/search"
@@ -136,18 +136,29 @@ async def fetch_posts_by_timeframe(subreddit: str, timeframe: str = 'week', size
                         data = await response.json()
                         posts = data['data']['children']
                         
+                        keyword_posts = []
                         for post in posts:
                             post_data = post['data']
                             if post_data['id'] not in seen_ids:
                                 seen_ids.add(post_data['id'])
-                                all_posts.append(post_data)
+                                keyword_posts.append(post_data)
                                 print_success(f"Found post with keyword '{keyword}': {post_data['title'][:100]}")
+                        return keyword_posts
                     else:
                         print_error(f"Failed to fetch posts for keyword '{keyword}'. Status code: {response.status}")
+                        return []
         except Exception as e:
             print_error(f"Error fetching posts for keyword '{keyword}': {e}")
-        
-        await asyncio.sleep(0.5)  # Rate limiting
+            return []
+
+    # Search all keywords in parallel
+    keyword_results = await asyncio.gather(*[
+        search_keyword(keyword) for keyword in PROBLEM_KEYWORDS
+    ])
+    
+    # Combine all results
+    for posts in keyword_results:
+        all_posts.extend(posts)
     
     # Filter by timeframe
     now = datetime.now()

@@ -12,7 +12,7 @@ from ...services.supabase_service import (
     update_post_analysis
 )
 from ...config import supabase  # Add this import for supabase client
-from ...utils.task_manager import active_tasks, register_task, cancel_task
+from ...utils.task_manager import task_manager
 from ...utils.logging import print_step, print_success, print_error
 
 router = APIRouter()
@@ -50,6 +50,9 @@ async def analyze_problems(request: ProblemAnalysisRequest, background_tasks: Ba
     # Generate a unique task ID
     task_id = str(int(time.time() * 1000))  # millisecond timestamp as ID
     print_step(f"Creating new search task with ID: {task_id}")
+    
+    # Initialize task in task manager
+    await task_manager.add_task(task_id, "system", request.dict())
     
     async def search_task():
         try:
@@ -150,6 +153,8 @@ async def analyze_problems(request: ProblemAnalysisRequest, background_tasks: Ba
             if not all_posts:
                 print_step("No posts found (neither in cache nor from new search)")
             
+            # Update task with results
+            task_manager.update_task_status(task_id, 'completed')
             return {
                 "status": "success",
                 "task_id": task_id,
@@ -167,11 +172,12 @@ async def analyze_problems(request: ProblemAnalysisRequest, background_tasks: Ba
             }
         except Exception as e:
             print_error(f"Error in search task {task_id}: {str(e)}")
+            task_manager.update_task_status(task_id, 'failed', str(e))
             raise
 
     # Create and store the task
     task = asyncio.create_task(search_task())
-    register_task(task_id, task)
+    task_manager.register_task(task_id, task)
     print_success(f"Task {task_id} created and stored")
     
     return {
@@ -184,31 +190,43 @@ async def analyze_problems(request: ProblemAnalysisRequest, background_tasks: Ba
 async def get_search_status(task_id: str):
     """Get the status of a search task."""
     print_step(f"Checking status of task {task_id}")
-    if task_id in active_tasks:
-        task = active_tasks[task_id]
+    task_info = task_manager.get_task_status(task_id)
+    
+    if not task_info:
+        raise HTTPException(status_code=404, detail="Search task not found")
+    
+    if task_id in task_manager.active_tasks:
+        task = task_manager.active_tasks[task_id]
         if task.done():
             try:
                 result = await task
-                active_tasks.pop(task_id, None)
+                task_manager.update_task_status(task_id, 'completed')
                 print_success(f"Task {task_id} completed")
                 return result
             except asyncio.CancelledError:
-                active_tasks.pop(task_id, None)
                 return {"status": "cancelled", "task_id": task_id}
             except Exception as e:
-                active_tasks.pop(task_id, None)
+                task_manager.update_task_status(task_id, 'failed', str(e))
                 return {"status": "error", "task_id": task_id, "error": str(e)}
         else:
             return {"status": "running", "task_id": task_id}
     else:
-        raise HTTPException(status_code=404, detail="Search task not found")
+        # Task exists but is not active (completed, failed, or cancelled)
+        return {
+            "status": task_info['status'],
+            "task_id": task_id,
+            "error": task_info.get('error'),
+            "result": task_info.get('result')
+        }
 
 @router.post("/analyze-problems/stop/{task_id}")
 async def stop_search(task_id: str):
     """Stop an ongoing search task."""
     print_step(f"Received stop request for task {task_id}")
-    if task_id in active_tasks:
-        await cancel_task(task_id)
-        return {"status": "cancelled", "task_id": task_id}
-    else:
-        raise HTTPException(status_code=404, detail="Search task not found") 
+    task_info = task_manager.get_task_status(task_id)
+    
+    if not task_info:
+        raise HTTPException(status_code=404, detail="Search task not found")
+    
+    await task_manager.cancel_task(task_id)
+    return {"status": "cancelled", "task_id": task_id} 

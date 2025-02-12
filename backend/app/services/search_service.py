@@ -53,15 +53,19 @@ async def process_subreddit_posts(subreddit: str, post_limit: int) -> int:
     return successful_posts
 
 async def fetch_and_filter_posts(subreddits: List[str], post_limit: int = 100) -> int:
-    """Fetch and process posts from multiple subreddits."""
-    print_step(f"Processing {len(subreddits)} subreddits...")
+    """Fetch and process posts from multiple subreddits in parallel."""
+    print_step(f"Processing {len(subreddits)} subreddits in parallel...")
     
-    total_successful = 0
-    for subreddit in subreddits:
-        successful = await process_subreddit_posts(subreddit, post_limit)
-        total_successful += successful
-        
-        print(f"\nProcessed {successful} posts from r/{subreddit}")
+    # Process all subreddits concurrently
+    results = await asyncio.gather(
+        *[process_subreddit_posts(subreddit, post_limit) for subreddit in subreddits]
+    )
+    
+    # Sum up the successful posts from all subreddits
+    total_successful = sum(results)
+    
+    for subreddit, successful in zip(subreddits, results):
+        print(f"Processed {successful} posts from r/{subreddit}")
     
     print(f"\nTotal processed: {total_successful}")
     return total_successful
@@ -100,22 +104,29 @@ async def smart_analysis_pipeline(
 
 async def _update_task_status(task_id: Optional[str], status: str, error: str = None) -> None:
     """Update task status if task_id is provided."""
-    if task_id and task_id in task_manager.tasks:
-        task_manager.tasks[task_id]['status'] = status
-        if error:
-            task_manager.tasks[task_id]['error'] = error
+    if task_id:
+        task_manager.update_task_status(task_id, status, error)
 
 async def _fetch_and_search_posts(
     query: str,
-    subreddit: str,
+    subreddit: Optional[str],
     min_similarity: float,
     max_posts: int
 ) -> List[Dict]:
     """Fetch new posts and search for similar ones."""
-    print_step(f"Fetching new posts from r/{subreddit}...")
-    await process_subreddit_posts(subreddit, 100)
+    print_step(f"Fetching new posts...")
     
-    similar_posts = await semantic_search_with_offset(query, subreddit, min_similarity, max_posts)
+    if subreddit:
+        # Single subreddit search
+        await process_subreddit_posts(subreddit, 100)
+        similar_posts = await semantic_search_with_offset(query, subreddit, min_similarity, max_posts)
+    else:
+        # Multi-subreddit search
+        default_subreddits = ["startups", "Entrepreneur", "SaaS"]  # Add your default subreddits
+        await fetch_and_filter_posts(default_subreddits, 100)
+        # Search across all subreddits
+        similar_posts = await semantic_search_with_offset(query, None, min_similarity, max_posts)
+    
     if not similar_posts:
         print_error("No similar posts found")
         return []
