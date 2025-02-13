@@ -15,8 +15,8 @@ class ApiClient<T> {
     return axiosInstance.get<T>(this.path);
   };
 
-  post = (data: T) => {
-    return axiosInstance.post(this.path, data);
+  post = (data: any) => {
+    return axiosInstance.post<T>(this.path, data);
   };
 }
 

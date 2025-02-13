@@ -1,4 +1,5 @@
 "use client";
+import useSearchStore from "@/context/searchStore";
 import useProblemSearch from "@/hooks/useProblemSearch";
 import { SubmitHandler, useForm } from "react-hook-form";
 
@@ -14,8 +15,8 @@ const SearchForm = () => {
     setValue,
     formState: { errors, isValid },
   } = useForm<FormData>();
-
-  const { mutate } = useProblemSearch();
+  const { isDone } = useSearchStore();
+  const { mutate, isPending } = useProblemSearch();
 
   const onSubmit: SubmitHandler<FormData> = (data) => {
     mutate(data);
@@ -64,7 +65,8 @@ const SearchForm = () => {
 
       <button
         type="submit"
-        className="w-full mt-4 py-2 px-4 rounded text-sm font-medium text-white bg-blue-500 hover:bg-blue-600 focus:outline-none transition-colors"
+        disabled={isPending || !isDone}
+        className="w-full mt-4 py-2 px-4 rounded text-sm font-medium text-white bg-blue-500 hover:bg-blue-600 focus:outline-none transition-colors disabled:opacity-85 disabled:hover:bg-blue-500"
       >
         Find Problems
       </button>
