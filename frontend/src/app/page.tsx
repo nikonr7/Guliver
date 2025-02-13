@@ -16,12 +16,17 @@ interface Post {
 }
 
 export default function Home() {
+  const [mounted, setMounted] = useState(false);
   const [searchResults, setSearchResults] = useState<Post[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [currentTimeframe, setCurrentTimeframe] = useState<string>('');
   const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const clearPolling = () => {
     if (pollIntervalRef.current) {
@@ -37,7 +42,6 @@ export default function Home() {
       try {
         const response = await fetch(`http://localhost:8000/api/analyze-problems/${taskId}/status`);
         const data = await response.json();
-        console.log('Poll response:', data);
 
         if (data.status === 'success' && data.data) {
           setSearchResults(data.data);
@@ -61,38 +65,21 @@ export default function Home() {
   };
 
   const handleStopSearch = async () => {
-    console.log('Stop search called, current task ID:', currentTaskId);
     if (currentTaskId) {
       try {
-        // First abort the fetch request
-        if (abortControllerRef.current) {
-          abortControllerRef.current.abort();
-          abortControllerRef.current = null;
-        }
-
-        // Stop polling
-        clearPolling();
-
-        // Then tell the backend to stop the task
-        const stopResponse = await fetch(`http://localhost:8000/api/analyze-problems/stop/${currentTaskId}`, {
+        await fetch(`http://localhost:8000/api/analyze-problems/${currentTaskId}/cancel`, {
           method: 'POST'
         });
-        const stopData = await stopResponse.json();
-        console.log('Stop response:', stopData);
-      } catch (error) {
-        console.error('Error stopping search:', error);
-      } finally {
+        clearPolling();
         setIsLoading(false);
         setCurrentTaskId(null);
+      } catch (error) {
+        console.error('Error stopping search:', error);
       }
-    } else {
-      console.log('No task ID available to stop');
-      setIsLoading(false);
     }
   };
 
   const handleProblemSearch = async (subreddit: string, timeframe: string) => {
-    // Abort any existing search
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
@@ -100,14 +87,12 @@ export default function Home() {
       await handleStopSearch();
     }
 
-    // Create new AbortController for this search
     abortControllerRef.current = new AbortController();
     setIsLoading(true);
     setCurrentTimeframe(timeframe);
-    setSearchResults([]); // Clear previous results
+    setSearchResults([]);
     
     try {
-      console.log('Starting new search...');
       const response = await fetch('http://localhost:8000/api/analyze-problems', {
         method: 'POST',
         headers: {
@@ -121,14 +106,11 @@ export default function Home() {
       });
       
       const data = await response.json();
-      console.log('Search response:', data);
       
       if (data.status === 'success' && data.task_id) {
-        console.log('Setting task ID:', data.task_id);
         setCurrentTaskId(data.task_id);
         startPolling(data.task_id);
       } else {
-        console.log('Search response not successful:', data);
         setIsLoading(false);
       }
     } catch (error) {
@@ -141,7 +123,6 @@ export default function Home() {
     }
   };
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       clearPolling();
@@ -150,6 +131,11 @@ export default function Home() {
       }
     };
   }, []);
+
+  // Prevent hydration mismatch by not rendering until mounted
+  if (!mounted) {
+    return null;
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
