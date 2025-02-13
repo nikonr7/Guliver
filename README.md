@@ -53,12 +53,10 @@ npm install
 
 ```bash
 cd backend
-uvicorn main:app --reload
-python main.py
+python -m app.main
 ```
 The backend server will start at `http://localhost:8000`
 
-### 2. Start the Frontend Development Server
 
 In a new terminal:
 ```bash
