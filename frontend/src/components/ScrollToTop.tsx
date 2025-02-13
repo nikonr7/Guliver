@@ -4,18 +4,25 @@ import { useState, useEffect } from 'react';
 
 export function ScrollToTop() {
   const [isVisible, setIsVisible] = useState(false);
+  const [isMounted, setIsMounted] = useState(false);
 
-  // Show button when page is scrolled up to given distance
-  const toggleVisibility = () => {
-    if (window.pageYOffset > 300) {
-      setIsVisible(true);
-    } else {
-      setIsVisible(false);
-    }
-  };
+  useEffect(() => {
+    setIsMounted(true);
+    
+    const toggleVisibility = () => {
+      if (window.pageYOffset > 300) {
+        setIsVisible(true);
+      } else {
+        setIsVisible(false);
+      }
+    };
 
-  // Set the top cordinate to 0
-  // make scrolling smooth
+    window.addEventListener("scroll", toggleVisibility);
+    return () => {
+      window.removeEventListener("scroll", toggleVisibility);
+    };
+  }, []);
+
   const scrollToTop = () => {
     window.scrollTo({
       top: 0,
@@ -23,12 +30,8 @@ export function ScrollToTop() {
     });
   };
 
-  useEffect(() => {
-    window.addEventListener("scroll", toggleVisibility);
-    return () => {
-      window.removeEventListener("scroll", toggleVisibility);
-    };
-  }, []);
+  // Don't render anything on the server or before hydration
+  if (!isMounted) return null;
 
   return (
     <>

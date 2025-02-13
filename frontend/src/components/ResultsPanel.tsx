@@ -92,7 +92,7 @@ export function ResultsPanel({
     return score.toString();
   };
 
-  const formatAnalysis = (analysis: string) => {
+  const formatAnalysis = (analysis: string, postId: string) => {
     // Split the analysis into sections based on numbered points
     const sections = analysis.split(/(?=\d+\.\s)/).filter(Boolean);
     
@@ -102,6 +102,7 @@ export function ResultsPanel({
       const contentText = content.join(':').trim(); // Rejoin in case there were colons in the content
       
       return {
+        id: `${postId}-section-${index}`,
         title: title.trim(),
         content: contentText
       };
@@ -144,8 +145,8 @@ export function ResultsPanel({
       {/* Sort posts by score before mapping */}
       {[...results]
         .sort((a, b) => b.score - a.score)
-        .map((post, index) => (
-        <div key={post.id} className="bg-white rounded-lg shadow p-6">
+        .map((post) => (
+        <div key={`post-${post.id}`} className="bg-white rounded-lg shadow p-6">
           <div className="flex items-start justify-between">
             <div className="flex-1">
               <div className="flex items-center gap-3 mb-2">
@@ -175,8 +176,8 @@ export function ResultsPanel({
             <div className="mt-4 space-y-4">
               <h4 className="font-medium text-gray-900">Analysis</h4>
               <div className="space-y-3">
-                {formatAnalysis(post.analysis).map((section, sIndex) => (
-                  <div key={sIndex} className="text-sm">
+                {formatAnalysis(post.analysis, post.id).map((section) => (
+                  <div key={section.id} className="text-sm">
                     <div className="font-medium text-gray-800">{section.title}</div>
                     <div className="mt-1 text-gray-600">{section.content}</div>
                   </div>
