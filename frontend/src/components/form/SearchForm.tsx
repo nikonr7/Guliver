@@ -15,11 +15,12 @@ const SearchForm = () => {
     setValue,
     formState: { errors, isValid },
   } = useForm<FormData>();
-  const { isDone } = useSearchStore();
+  const { isDone, setTaskResults } = useSearchStore();
   const { mutate, isPending } = useProblemSearch();
 
   const onSubmit: SubmitHandler<FormData> = (data) => {
     mutate(data);
+    setTaskResults(null);
   };
 
   return (

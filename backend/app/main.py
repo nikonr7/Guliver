@@ -35,12 +35,15 @@ async def event_generator(task_id: str):
         if current_task.done():
             task_results = await current_task
             task_results_to_json = json.dumps(task_results)
+            remove_task(task_id)
             yield f"data: {task_results_to_json}\n\n"
+        
+        resp = f'data: {{"status":"in process","task_id":"{task_id}"}}\n\n'
+        print("returning task status instead", resp)
+        yield resp
             
     except Exception as e:
         pass
-    finally:
-        remove_task(task_id)
 
 @app.get("/events/{task_id}")
 async def task_events(task_id: str):

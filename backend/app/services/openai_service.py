@@ -16,6 +16,7 @@ Your task is to analyze both the post and its comments to determine whether they
 3. Potential startup ideas or business solutions
 4. Market size indicators and trends
 5. Competitive landscape insights
+6. Format the output as a proper markdown
 
 Pay special attention to user comments as they often provide validation of problems and additional context. Be precise, practical, and focus on actionable insights."""},
                 {"role": "user", "content": f"Analyze this Reddit post and its comments to extract valuable market insights:\n\n{text}"}
