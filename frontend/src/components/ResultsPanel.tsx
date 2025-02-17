@@ -145,8 +145,12 @@ export function ResultsPanel({
       {/* Sort posts by score before mapping */}
       {[...results]
         .sort((a, b) => b.score - a.score)
-        .map((post) => (
-        <div key={`post-${post.id}`} className="bg-white rounded-lg shadow p-6">
+        // Remove duplicates based on ID and score combination
+        .filter((post, index, self) => 
+          index === self.findIndex((p) => p.id === post.id && p.score === post.score)
+        )
+        .map((post, index) => (
+        <div key={`post-${post.id}-${index}`} className="bg-white rounded-lg shadow p-6">
           <div className="flex items-start justify-between">
             <div className="flex-1">
               <div className="flex items-center gap-3 mb-2">
