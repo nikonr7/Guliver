@@ -1,167 +1,64 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
-import { SearchPanel } from '@/components/SearchPanel';
-import { ResultsPanel } from '@/components/ResultsPanel';
-import { Header } from '@/components/Header';
-
-interface Post {
-  id: string;
-  title: string;
-  selftext: string;
-  analysis: string;
-  url: string;
-  score: number;
-  subreddit: string;
-}
+import { useEffect } from 'react';
+import { useAuth } from '@/contexts/AuthContext';
+import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 
 export default function Home() {
-  const [mounted, setMounted] = useState(false);
-  const [searchResults, setSearchResults] = useState<Post[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [currentTimeframe, setCurrentTimeframe] = useState<string>('');
-  const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
-  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const { user, loading } = useAuth();
+  const router = useRouter();
 
   useEffect(() => {
-    setMounted(true);
-  }, []);
-
-  const clearPolling = () => {
-    if (pollIntervalRef.current) {
-      clearInterval(pollIntervalRef.current);
-      pollIntervalRef.current = null;
+    if (!loading && user) {
+      router.push('/dashboard');
     }
-  };
+  }, [user, loading, router]);
 
-  const startPolling = (taskId: string) => {
-    clearPolling();
-    
-    const pollStatus = async () => {
-      try {
-        const response = await fetch(`http://localhost:8000/api/analyze-problems/${taskId}/status`);
-        const data = await response.json();
-
-        if (data.status === 'success' && data.data) {
-          setSearchResults(data.data);
-          setIsLoading(false);
-          setCurrentTaskId(null);
-          clearPolling();
-        } else if (data.status === 'cancelled' || data.status === 'error') {
-          setIsLoading(false);
-          setCurrentTaskId(null);
-          clearPolling();
-        }
-      } catch (error) {
-        console.error('Error polling status:', error);
-        setIsLoading(false);
-        setCurrentTaskId(null);
-        clearPolling();
-      }
-    };
-
-    pollIntervalRef.current = setInterval(pollStatus, 1000);
-  };
-
-  const handleStopSearch = async () => {
-    if (currentTaskId) {
-      try {
-        await fetch(`http://localhost:8000/api/analyze-problems/${currentTaskId}/cancel`, {
-          method: 'POST'
-        });
-        clearPolling();
-        setIsLoading(false);
-        setCurrentTaskId(null);
-      } catch (error) {
-        console.error('Error stopping search:', error);
-      }
-    }
-  };
-
-  const handleProblemSearch = async (subreddit: string, timeframe: string) => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
-    if (currentTaskId) {
-      await handleStopSearch();
-    }
-
-    abortControllerRef.current = new AbortController();
-    setIsLoading(true);
-    setCurrentTimeframe(timeframe);
-    setSearchResults([]);
-    
-    try {
-      const response = await fetch('http://localhost:8000/api/analyze-problems', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          subreddit,
-          timeframe
-        }),
-        signal: abortControllerRef.current.signal
-      });
-      
-      const data = await response.json();
-      
-      if (data.status === 'success' && data.task_id) {
-        setCurrentTaskId(data.task_id);
-        startPolling(data.task_id);
-      } else {
-        setIsLoading(false);
-      }
-    } catch (error) {
-      if (error.name === 'AbortError') {
-        console.log('Search was stopped');
-      } else {
-        console.error('Problem search failed:', error);
-      }
-      setIsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    return () => {
-      clearPolling();
-      if (currentTaskId) {
-        handleStopSearch();
-      }
-    };
-  }, []);
-
-  // Prevent hydration mismatch by not rendering until mounted
-  if (!mounted) {
+  if (loading) {
     return null;
   }
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <Header />
-      <main className="container mx-auto px-4 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          <div className="lg:col-span-1">
-            <SearchPanel 
-              onProblemSearch={handleProblemSearch}
-              onStopSearch={handleStopSearch}
-              isLoading={isLoading} 
-            />
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="flex justify-between items-center py-6">
+          <div className="flex items-center">
+            <h1 className="text-2xl font-bold text-gray-900">Guliver</h1>
           </div>
-          <div className="lg:col-span-2">
-            <ResultsPanel 
-              results={searchResults} 
-              isLoading={isLoading}
-              isLoadingMore={false}
-              onLoadMore={() => {}}
-              hasMore={false}
-              isProblemSearch={true}
-              timeframe={currentTimeframe}
-            />
+          <div className="flex items-center space-x-4">
+            <Link
+              href="/login"
+              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700"
+            >
+              Sign In
+            </Link>
+            <Link
+              href="/signup"
+              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-indigo-600 bg-white hover:bg-gray-50"
+            >
+              Sign Up
+            </Link>
           </div>
         </div>
-      </main>
+
+        <div className="mt-16 text-center">
+          <h2 className="text-4xl font-extrabold text-gray-900 sm:text-5xl sm:tracking-tight lg:text-6xl">
+            Welcome to Guliver
+          </h2>
+          <p className="mt-5 max-w-xl mx-auto text-xl text-gray-500">
+            Analyze Reddit discussions and discover insights with AI-powered tools.
+          </p>
+          <div className="mt-8">
+            <Link
+              href="/signup"
+              className="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700"
+            >
+              Get Started
+            </Link>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
