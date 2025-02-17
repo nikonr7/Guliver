@@ -55,7 +55,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       password,
     })
     if (error) throw error
-    router.push('/dashboard')
   }
 
   const signOut = async () => {
