@@ -1,4 +1,3 @@
-
 ## Installation
 
 ### 1. Clone the repository
@@ -21,7 +20,7 @@ cd backend
 pip install -r requirements.txt
 ```
 
-3. Set up environment variables:
+3. Set up  main environment variables:
    Create a `.env` file in the root directory with the following variables:
 ```env
 # Reddit API Credentials
@@ -45,6 +44,14 @@ SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
 ```bash
 cd frontend
 npm install
+```
+
+2. Set up environment variables in the frontend directory (use the same variables as in the backend):
+   Create a `.env.local` file in the frontend directory with the following variables:
+```env
+# Supabase Configuration
+NEXT_PUBLIC_SUPABASE_URL=your_supabase_project_url
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
 ```
 
 ## Running the Application
