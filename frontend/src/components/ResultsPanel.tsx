@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { BookmarkButton } from './BookmarkButton';
 
 interface Post {
   id: string;
@@ -150,47 +151,50 @@ export function ResultsPanel({
           index === self.findIndex((p) => p.id === post.id && p.score === post.score)
         )
         .map((post, index) => (
-        <div key={`post-${post.id}-${index}`} className="bg-white rounded-lg shadow p-6">
-          <div className="flex items-start justify-between">
-            <div className="flex-1">
-              <div className="flex items-center gap-3 mb-2">
-                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-sm font-medium bg-green-100 text-green-800">
-                  {formatScore(post.score)} votes
-                </span>
-                <span className="text-sm text-gray-500">r/{post.subreddit}</span>
-              </div>
-              <h3 className="text-lg font-medium text-gray-900 mb-1">{post.title}</h3>
-              {post.selftext && (
-                <div className="mt-2 text-sm text-gray-600 line-clamp-3">
-                  {post.selftext}
+          <div key={`post-${post.id}-${index}`} className="bg-white rounded-lg shadow p-6">
+            <div className="flex items-start justify-between">
+              <div className="flex-1">
+                <div className="flex items-center gap-3 mb-2">
+                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-sm font-medium bg-green-100 text-green-800">
+                    {formatScore(post.score)} votes
+                  </span>
+                  <span className="text-sm text-gray-500">r/{post.subreddit}</span>
                 </div>
-              )}
-            </div>
-            <a
-              href={getRedditUrl(post.url)}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex-shrink-0 text-blue-600 hover:text-blue-800 text-sm"
-            >
-              View on Reddit →
-            </a>
-          </div>
-
-          {post.analysis && (
-            <div className="mt-4 space-y-4">
-              <h4 className="font-medium text-gray-900">Analysis</h4>
-              <div className="space-y-3">
-                {formatAnalysis(post.analysis, post.id).map((section) => (
-                  <div key={section.id} className="text-sm">
-                    <div className="font-medium text-gray-800">{section.title}</div>
-                    <div className="mt-1 text-gray-600">{section.content}</div>
+                <h3 className="text-lg font-medium text-gray-900 mb-1">{post.title}</h3>
+                {post.selftext && (
+                  <div className="mt-2 text-sm text-gray-600 line-clamp-3">
+                    {post.selftext}
                   </div>
-                ))}
+                )}
+              </div>
+              <div className="flex items-center space-x-2">
+                <BookmarkButton postId={post.id} />
+                <a
+                  href={getRedditUrl(post.url)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-600 hover:text-blue-800 text-sm"
+                >
+                  View on Reddit →
+                </a>
               </div>
             </div>
-          )}
-        </div>
-      ))}
+
+            {post.analysis && (
+              <div className="mt-4 space-y-4">
+                <h4 className="font-medium text-gray-900">Analysis</h4>
+                <div className="space-y-3">
+                  {formatAnalysis(post.analysis, post.id).map((section) => (
+                    <div key={section.id} className="text-sm">
+                      <div className="font-medium text-gray-800">{section.title}</div>
+                      <div className="mt-1 text-gray-600">{section.content}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
 
       {hasMore && (
         <div className="flex justify-center">

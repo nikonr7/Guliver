@@ -2,9 +2,11 @@
 
 import Link from 'next/link';
 import { useAuth } from '@/contexts/AuthContext';
+import { usePathname } from 'next/navigation';
 
 export function Header() {
   const { user, signOut } = useAuth();
+  const pathname = usePathname();
 
   const handleLogout = async () => {
     try {
@@ -12,6 +14,10 @@ export function Header() {
     } catch (error) {
       console.error('Error signing out:', error);
     }
+  };
+
+  const isActive = (path: string) => {
+    return pathname === path ? 'text-blue-600' : 'text-gray-600 hover:text-gray-900';
   };
 
   return (
@@ -25,13 +31,19 @@ export function Header() {
             <nav className="flex space-x-4">
               <Link 
                 href="/dashboard" 
-                className="text-gray-600 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium"
+                className={`${isActive('/dashboard')} px-3 py-2 rounded-md text-sm font-medium`}
               >
                 Search
               </Link>
               <Link 
+                href="/bookmarks" 
+                className={`${isActive('/bookmarks')} px-3 py-2 rounded-md text-sm font-medium`}
+              >
+                Bookmarks
+              </Link>
+              <Link 
                 href="/analytics" 
-                className="text-gray-600 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium"
+                className={`${isActive('/analytics')} px-3 py-2 rounded-md text-sm font-medium`}
               >
                 Analytics
               </Link>
