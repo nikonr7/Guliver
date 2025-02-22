@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { BookmarkButton } from './BookmarkButton';
+import { SaveButton } from './SaveButton';
 
 interface Post {
   id: string;
@@ -168,7 +168,7 @@ export function ResultsPanel({
                 )}
               </div>
               <div className="flex items-center space-x-2">
-                <BookmarkButton postId={post.id} />
+                <SaveButton postId={post.id} />
                 <a
                   href={getRedditUrl(post.url)}
                   target="_blank"

@@ -4,9 +4,9 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/lib/supabase';
 import { Header } from '@/components/Header';
-import { BookmarkButton } from '@/components/BookmarkButton';
+import { SaveButton } from '@/components/SaveButton';
 
-interface BookmarkedPost {
+interface SavedPost {
   id: string;
   title: string;
   selftext: string;
@@ -17,21 +17,21 @@ interface BookmarkedPost {
   created_at: string;
 }
 
-export default function BookmarksPage() {
-  const [bookmarkedPosts, setBookmarkedPosts] = useState<BookmarkedPost[]>([]);
+export default function HistoryPage() {
+  const [savedPosts, setSavedPosts] = useState<SavedPost[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const { user } = useAuth();
 
   useEffect(() => {
     if (user) {
-      fetchBookmarkedPosts();
+      fetchSavedPosts();
     }
   }, [user]);
 
-  const fetchBookmarkedPosts = async () => {
+  const fetchSavedPosts = async () => {
     try {
-      const { data: bookmarks, error: bookmarksError } = await supabase
-        .from('bookmarks')
+      const { data: history, error: historyError } = await supabase
+        .from('history')
         .select(`
           post_id,
           created_at,
@@ -48,18 +48,18 @@ export default function BookmarksPage() {
         .eq('user_id', user?.id)
         .order('created_at', { ascending: false });
 
-      if (bookmarksError) throw bookmarksError;
+      if (historyError) throw historyError;
 
-      const posts = bookmarks
-        .map((bookmark) => ({
-          ...bookmark.reddit_posts,
-          created_at: bookmark.created_at,
+      const posts = history
+        .map((item) => ({
+          ...item.reddit_posts,
+          created_at: item.created_at,
         }))
-        .filter((post): post is BookmarkedPost => post !== null);
+        .filter((post): post is SavedPost => post !== null);
 
-      setBookmarkedPosts(posts);
+      setSavedPosts(posts);
     } catch (error) {
-      console.error('Error fetching bookmarked posts:', error);
+      console.error('Error fetching saved posts:', error);
     } finally {
       setIsLoading(false);
     }
@@ -70,19 +70,19 @@ export default function BookmarksPage() {
       <Header />
       <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
         <div className="px-4 py-6 sm:px-0">
-          <h1 className="text-3xl font-bold text-gray-900 mb-8">Your Bookmarks</h1>
+          <h1 className="text-3xl font-bold text-gray-900 mb-8">History</h1>
           
           {isLoading ? (
             <div className="text-center py-12">
               <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
             </div>
-          ) : bookmarkedPosts.length === 0 ? (
+          ) : savedPosts.length === 0 ? (
             <div className="text-center py-12">
-              <p className="text-gray-500 text-lg">You haven't bookmarked any posts yet.</p>
+              <p className="text-gray-500 text-lg">You haven't saved any posts yet.</p>
             </div>
           ) : (
             <div className="space-y-6">
-              {bookmarkedPosts.map((post) => (
+              {savedPosts.map((post) => (
                 <div
                   key={post.id}
                   className="bg-white shadow rounded-lg overflow-hidden"
@@ -97,7 +97,7 @@ export default function BookmarksPage() {
                           Posted in r/{post.subreddit} • Score: {post.score}
                         </p>
                       </div>
-                      <BookmarkButton postId={post.id} />
+                      <SaveButton postId={post.id} />
                     </div>
                     
                     {post.selftext && (
@@ -128,7 +128,7 @@ export default function BookmarksPage() {
                         View on Reddit →
                       </a>
                       <span className="text-sm text-gray-500">
-                        Bookmarked on {new Date(post.created_at).toLocaleDateString()}
+                        Saved on {new Date(post.created_at).toLocaleDateString()}
                       </span>
                     </div>
                   </div>

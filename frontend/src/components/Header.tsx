@@ -36,10 +36,10 @@ export function Header() {
                 Search
               </Link>
               <Link 
-                href="/bookmarks" 
-                className={`${isActive('/bookmarks')} px-3 py-2 rounded-md text-sm font-medium`}
+                href="/history" 
+                className={`${isActive('/history')} px-3 py-2 rounded-md text-sm font-medium`}
               >
-                Bookmarks
+                History
               </Link>
               <Link 
                 href="/analytics" 
