@@ -2,10 +2,11 @@ import { useState } from 'react';
 
 interface SearchPanelProps {
   onProblemSearch: (subreddit: string, timeframe: string) => void;
+  onStopSearch: () => void;
   isLoading: boolean;
 }
 
-export function SearchPanel({ onProblemSearch, isLoading }: SearchPanelProps) {
+export function SearchPanel({ onProblemSearch, onStopSearch, isLoading }: SearchPanelProps) {
   const [subreddit, setSubreddit] = useState('');
   const [showHelp, setShowHelp] = useState(false);
   const [timeframe, setTimeframe] = useState('week');
@@ -81,22 +82,34 @@ export function SearchPanel({ onProblemSearch, isLoading }: SearchPanelProps) {
           </p>
         </div>
 
-        <button
-          type="submit"
-          disabled={isLoading || !subreddit.trim()}
-          className={`w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors ${
-            isLoading || !subreddit.trim() ? 'opacity-50 cursor-not-allowed' : ''
-          }`}
-        >
-          {isLoading ? (
-            <div className="flex items-center space-x-2">
-              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-              <span>Searching...</span>
-            </div>
-          ) : (
-            'Find Problems'
+        <div className="flex space-x-3">
+          <button
+            type="submit"
+            disabled={isLoading || !subreddit.trim()}
+            className={`flex-1 flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors ${
+              isLoading || !subreddit.trim() ? 'opacity-50 cursor-not-allowed' : ''
+            }`}
+          >
+            {isLoading ? (
+              <div className="flex items-center space-x-2">
+                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                <span>Searching...</span>
+              </div>
+            ) : (
+              'Find Problems'
+            )}
+          </button>
+          
+          {isLoading && (
+            <button
+              type="button"
+              onClick={onStopSearch}
+              className="px-4 py-3 border border-red-300 rounded-md shadow-sm text-sm font-medium text-red-600 bg-white hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-colors"
+            >
+              Stop
+            </button>
           )}
-        </button>
+        </div>
       </form>
     </div>
   );
