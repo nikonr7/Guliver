@@ -4,9 +4,10 @@ import { useAuth } from '@/contexts/AuthContext';
 
 interface SaveButtonProps {
   postId: string;
+  onSaveToggle?: () => void;
 }
 
-export function SaveButton({ postId }: SaveButtonProps) {
+export function SaveButton({ postId, onSaveToggle }: SaveButtonProps) {
   const [isSaved, setIsSaved] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const { user } = useAuth();
@@ -64,6 +65,11 @@ export function SaveButton({ postId }: SaveButtonProps) {
             },
           ]);
         setIsSaved(true);
+      }
+      
+      // Call the callback function if provided
+      if (onSaveToggle) {
+        onSaveToggle();
       }
     } catch (error) {
       console.error('Error toggling save:', error);

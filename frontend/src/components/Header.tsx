@@ -42,6 +42,12 @@ export function Header() {
                 History
               </Link>
               <Link 
+                href="/ideas" 
+                className={`${isActive('/ideas')} px-3 py-2 rounded-md text-sm font-medium`}
+              >
+                Ideas
+              </Link>
+              <Link 
                 href="/analytics" 
                 className={`${isActive('/analytics')} px-3 py-2 rounded-md text-sm font-medium`}
               >
